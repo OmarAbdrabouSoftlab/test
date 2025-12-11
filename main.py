@@ -82,9 +82,7 @@ def dataframe_to_excel_bytes(df: pd.DataFrame, report_type: int) -> bytes:
 
 
 def send_report_email(report_type: int, xlsx_bytes: bytes) -> None:
-    sender_email = os.environ.get("SENDER_EMAIL")
-    if not sender_email:
-        raise RuntimeError("SENDER_EMAIL environment variable is not set")
+    sender_email = SENDER_EMAIL
 
     msg = EmailMessage()
     msg["Subject"] = f"Report tipo {report_type}"
