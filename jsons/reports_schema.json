@@ -76,6 +76,12 @@
       "label": "Agenzia anagrafica",
       "type": "string",
       "required": false
+    },
+    "consorzio": {
+      "source_column": "CONSORZIO",
+      "label": "Consorzio",
+      "type": "string",
+      "required": false
     }
   },
 

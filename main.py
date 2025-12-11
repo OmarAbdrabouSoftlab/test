@@ -1,10 +1,110 @@
-import datetime
+import io
 import os
+import smtplib
 
 import functions_framework
+import pandas as pd
+from email.message import EmailMessage
 from flask import Request, make_response
-from report_builder import build_report_excel
-from report_schema import delete_s3_prefix, write_bytes_to_s3
+
+SMTP_HOST = "smtp.gmail.com"
+SMTP_PASSWORD = "rvkq aujj fzeb emhf"
+SMTP_PORT = 587
+RECIPIENT_EMAIL = "omar.abdrabou97@gmail.com"
+SENDER_EMAIL = "omar.abdrabou97@gmail.com"
+
+SHARED_COLS = [
+    "FATT_LORDO_SCONTO_CASSA_ANNO_CORR",
+    "FATT_LORDO_SCONTO_CASSA_ANNO_PREC",
+    "DELTA_FATTURATO",
+    "DELTA_FATTURATO_PERC",
+    "PORTA_ORD_EVAS_CORR",
+]
+
+TYPE_SPECIFIC_COLS = {
+    1: ["RAGIONE_SOCIALE", "GRUPPO_MERCEOLOGICO"],
+    2: ["GRUPPO_COMMERCIALE", "GRUPPO_MERCEOLOGICO"],
+    3: ["CONSORZIO", "GRUPPO_MERCEOLOGICO", "RAGIONE_SOCIALE"],
+    4: ["AGENZIA_ANAGRAFICA", "RAGIONE_SOCIALE"],
+    5: ["AGENZIA_ANAGRAFICA", "RAGIONE_SOCIALE", "GRUPPO_MERCEOLOGICO"],
+}
+
+
+def get_smtp_connection() -> smtplib.SMTP:
+    sender_email = SENDER_EMAIL
+    smtp_password = SMTP_PASSWORD
+
+    if not sender_email or not smtp_password:
+        raise RuntimeError("Missing SENDER_EMAIL or SMTP_PASSWORD environment variables")
+
+    server = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
+    server.starttls()
+    server.login(sender_email, smtp_password)
+    return server
+
+
+def load_and_filter_dataframe(report_type: int) -> pd.DataFrame:
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    csv_path = os.path.join(base_dir, "test.csv")
+
+    df = pd.read_csv(
+        csv_path,
+        sep=";",
+        decimal=",",
+        thousands=".",
+        dtype={"report_type": "int64"},
+    )
+
+    df_filtered = df[df["report_type"] == report_type].copy()
+    if df_filtered.empty:
+        raise RuntimeError(f"No rows found for report_type={report_type}")
+
+    specific_cols = TYPE_SPECIFIC_COLS.get(report_type)
+    if not specific_cols:
+        raise RuntimeError(f"Unsupported report_type={report_type}")
+
+    cols_order = []
+    for col in specific_cols + SHARED_COLS + ["report_type"]:
+        if col in df_filtered.columns and col not in cols_order:
+            cols_order.append(col)
+
+    df_filtered = df_filtered[cols_order]
+    return df_filtered
+
+
+def dataframe_to_excel_bytes(df: pd.DataFrame, report_type: int) -> bytes:
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
+        sheet_name = f"tipo_{report_type}"
+        df.to_excel(writer, index=False, sheet_name=sheet_name)
+    buffer.seek(0)
+    return buffer.read()
+
+
+def send_report_email(report_type: int, xlsx_bytes: bytes) -> None:
+    sender_email = os.environ.get("SENDER_EMAIL")
+    if not sender_email:
+        raise RuntimeError("SENDER_EMAIL environment variable is not set")
+
+    msg = EmailMessage()
+    msg["Subject"] = f"Report tipo {report_type}"
+    msg["From"] = sender_email
+    msg["To"] = RECIPIENT_EMAIL
+    msg.set_content(f"Report tipo {report_type} in allegato.")
+
+    filename = f"report_tipo_{report_type}.xlsx"
+    msg.add_attachment(
+        xlsx_bytes,
+        maintype="application",
+        subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=filename,
+    )
+
+    server = get_smtp_connection()
+    try:
+        server.send_message(msg)
+    finally:
+        server.quit()
 
 
 @functions_framework.http
@@ -24,36 +124,11 @@ def generate_report(request: Request):
         except ValueError:
             return make_response(("'report_type' must be an integer", 400))
 
-        xlsx_bytes = build_report_excel(report_type)
+        df = load_and_filter_dataframe(report_type)
+        xlsx_bytes = dataframe_to_excel_bytes(df, report_type)
+        send_report_email(report_type, xlsx_bytes)
 
-        output_root = os.environ.get("OUTPUT_S3_URI_PREFIX")
-        output_uri = None
-        if output_root:
-            if not output_root.startswith("s3://"):
-                return make_response(("Invalid OUTPUT_S3_URI_PREFIX", 500))
-            if not output_root.endswith("/"):
-                output_root = output_root + "/"
-            today = datetime.date.today().isoformat()
-            date_prefix_uri = output_root + today + "/"
-            delete_s3_prefix(date_prefix_uri)
-            filename = f"report_tipo_{report_type}.xlsx"
-            output_uri = date_prefix_uri + filename
-            write_bytes_to_s3(
-                output_uri,
-                xlsx_bytes,
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
+        return make_response((f"Report tipo {report_type} generated and emailed.", 200))
 
-        response = make_response(xlsx_bytes, 200)
-        response.headers["Content-Type"] = (
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-        response.headers["Content-Disposition"] = (
-            f'attachment; filename="report_tipo_{report_type}.xlsx"'
-        )
-        if output_uri:
-            response.headers["X-Report-S3-Uri"] = output_uri
-        return response
-
-    except Exception as e:
-        return make_response((f"Internal error: {e}", 500))
+    except Exception as exc:
+        return make_response((f"Internal error: {exc}", 500))
