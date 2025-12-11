@@ -1,0 +1,126 @@
+{
+  "version": "1.0",
+
+  "sources": {
+    "main_csv": {
+      "path": "s3://bucket_Hiop/Input/",
+      "format": "csv",
+      "delimiter": ";",
+      "encoding": "utf-8",
+      "header": true,
+      "decimal": ",",
+      "thousands": "."
+    }
+  },
+
+  "shared_fields": [
+    "fatt_lordo_sconto_cassa_anno_corrente",
+    "fatt_lordo_sconto_cassa_anno_precedente",
+    "delta_fatturato_assoluto",
+    "delta_fatturato_percentuale",
+    "portafoglio_ordini_da_evadere_anno_corrente"
+  ],
+
+  "fields": {
+    "fatt_lordo_sconto_cassa_anno_corrente": {
+      "source_column": "FATT_LORDO_SCONTO_CASSA_ANNO_CORR",
+      "label": "Fatturato lordo sconto cassa anno corrente",
+      "type": "number",
+      "required": true
+    },
+    "fatt_lordo_sconto_cassa_anno_precedente": {
+      "source_column": "FATT_LORDO_SCONTO_CASSA_ANNO_PREC",
+      "label": "Fatturato lordo sconto cassa anno precedente",
+      "type": "number",
+      "required": true
+    },
+    "delta_fatturato_assoluto": {
+      "source_column": "DELTA_FATTURATO",
+      "label": "Delta fatturato tra i due anni",
+      "type": "number",
+      "required": true
+    },
+    "delta_fatturato_percentuale": {
+      "source_column": "DELTA_FATTURATO_PERC",
+      "label": "Delta percentuale fatturato tra i due anni",
+      "type": "number",
+      "required": true
+    },
+    "portafoglio_ordini_da_evadere_anno_corrente": {
+      "source_column": "PORTA_ORD_EVAS_CORR",
+      "label": "Portafoglio ordini da evadere anno corrente",
+      "type": "number",
+      "required": false
+    },
+
+    "ragione_sociale": {
+      "source_column": "RAGIONE_SOCIALE",
+      "label": "Ragione sociale",
+      "type": "string",
+      "required": false
+    },
+    "gruppo_merceologico": {
+      "source_column": "GRUPPO_MERCEOLOGICO",
+      "label": "Gruppo merceologico",
+      "type": "string",
+      "required": false
+    },
+    "gruppo_commerciale": {
+      "source_column": "GRUPPO_COMMERCIALE",
+      "label": "Gruppo commerciale",
+      "type": "string",
+      "required": false
+    },
+    "agenzia_anagrafica": {
+      "source_column": "AGENZIA_ANAGRAFICA",
+      "label": "Agenzia anagrafica",
+      "type": "string",
+      "required": false
+    }
+  },
+
+  "report_types": {
+    "1": {
+      "name": "Report tipo 1",
+      "source": "main_csv",
+      "specific_fields": [
+        "ragione_sociale",
+        "gruppo_merceologico"
+      ]
+    },
+    "2": {
+      "name": "Report tipo 2",
+      "source": "main_csv",
+      "specific_fields": [
+        "gruppo_commerciale",
+        "gruppo_merceologico"
+      ]
+    },
+    "3": {
+      "name": "Report tipo 3",
+      "source": "main_csv",
+      "specific_fields": [
+        "consorzio",
+        "gruppo_merceologico",
+        "ragione_sociale"
+      ]
+    },
+    "4": {
+      "name": "Report tipo 4",
+      "source": "main_csv",
+      "specific_fields": [
+        "agenzia_anagrafica",
+        "ragione_sociale"
+      ]
+    },
+    "5": {
+      "name": "Report tipo 5",
+      "source": "main_csv",
+      "specific_fields": [
+        "agenzia_anagrafica",
+        "ragione_sociale",
+        "gruppo_merceologico"
+      ]
+    }
+  }
+}

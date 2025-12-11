@@ -1,0 +1,66 @@
+{
+  "version": "1.0",
+  "clients": [
+    {
+      "field": "ragione_sociale",
+      "report_types": [1],
+      "values": [
+        "SONEPAR ITALIA S.P.A.",
+        "ELETTROVENETA S.P.A.",
+        "SACCHI GIUSEPPE S.P.A.",
+        "ACMEI SUD S.P.A.",
+        "EDIF S.P.A.",
+        "BARCELLA ELETTROFORNITURE SPA",
+        "REMATARLAZZI S.P.A.",
+        "REXEL ITALIA SPA",
+        "COMOLI FERRARI & C. SPA",
+        "M.E.B. S.R.L.",
+        "COMET SPA",
+        "BI ESSE S.P.A.",
+        "STRANO S.P.A."
+      ]
+    },
+    {
+      "field": "gruppo_commerciale",
+      "report_types": [2],
+      "values": [
+        "GRUPPO MEGAWATT",
+        "GRUPPO COMET",
+        "GRUPPO GLI ELETTRICI",
+        "GRUPPO COMINI",
+        "GRUPPO CORIME"
+      ]
+    },
+    {
+      "field": "consorzio",
+      "report_types": [3],
+      "values": [
+        "ANSE2000",
+        "GEWA"
+      ]
+    },
+    {
+      "field": "codice_agenzia",
+      "report_types": [4, 5],
+      "values": [
+        "WATT SRLS",
+        "GRIMALDI FRANCESCO",
+        "VM RAPPRESENTANZE SRL",
+        "SARCO DI PICCIONE R. & ZUCCHINI P. S",
+        "BCD RAPPRESENTANZE SNC DI CAPPUGI AL",
+        "RAPPRESENTANZE ELETTRICHE PIEMONTESI",
+        "S.V.R. S.R.L.",
+        "PALLAVER ANTONIO",
+        "CALABRIA LUIGINO",
+        "ELETTROSOLUZIONI POWER SNC DI VONA V",
+        "DG S.A.S. DI PAOLO DI GENOVA & C.",
+        "M.T.M. RAPPRESENTANZE ELETTRICHE SRL",
+        "ERAMO VITTORIO",
+        "MELIS EMANUELE",
+        "MARITEA D.O.O.",
+        "AGENTE DIREZIONALE",
+        "EL.CO.R  E.E."
+      ]
+    }
+  ]
+}
