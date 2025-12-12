@@ -7,11 +7,17 @@ import pandas as pd
 from email.message import EmailMessage
 from flask import Request, make_response
 
-SMTP_HOST = "smtp.gmail.com"
-SMTP_PASSWORD = "rvkq aujj fzeb emhf"
+# SMTP_HOST = "smtp.gmail.com"
+# SMTP_PASSWORD = "rvkq aujj fzeb emhf"
+# SMTP_PORT = 587
+# RECIPIENT_EMAIL = "omar.abdrabou97@gmail.com"
+# SENDER_EMAIL = "omar.abdrabou97@gmail.com"
+
+SMTP_HOST = "email-smtp.eu-central-1.amazonaws.com"
+SMTP_PASSWORD = "BEBM+YU21gJzy8SkL2WTG+ubr+yg6j6OELcmQ87H3xYE"
 SMTP_PORT = 587
 RECIPIENT_EMAIL = "omar.abdrabou97@gmail.com"
-SENDER_EMAIL = "omar.abdrabou97@gmail.com"
+SENDER_EMAIL = "no-reply@hiop.it"
 
 SHARED_COLS = [
     "FATT_LORDO_SCONTO_CASSA_ANNO_CORR",
