@@ -7,17 +7,12 @@ import pandas as pd
 from email.message import EmailMessage
 from flask import Request, make_response
 
-# SMTP_HOST = "smtp.gmail.com"
-# SMTP_PASSWORD = "rvkq aujj fzeb emhf"
-# SMTP_PORT = 587
-# RECIPIENT_EMAIL = "omar.abdrabou97@gmail.com"
-# SENDER_EMAIL = "omar.abdrabou97@gmail.com"
-
-SMTP_HOST = "email-smtp.eu-central-1.amazonaws.com"
-SMTP_PASSWORD = "BEBM+YU21gJzy8SkL2WTG+ubr+yg6j6OELcmQ87H3xYE"
-SMTP_PORT = 587
-RECIPIENT_EMAIL = "omar.abdrabou97@gmail.com"
-SENDER_EMAIL = "no-reply@hiop.it"
+SMTP_HOST = os.environ.get("SMTP_HOST", "email-smtp.eu-central-1.amazonaws.com")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+SENDER_EMAIL = os.environ.get("SENDER_EMAIL")
+SMTP_USERNAME = os.environ.get("SMTP_USERNAME")
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD")
+RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL", "omar.abdrabou97@gmail.com")
 
 SHARED_COLS = [
     "FATT_LORDO_SCONTO_CASSA_ANNO_CORR",
@@ -37,15 +32,12 @@ TYPE_SPECIFIC_COLS = {
 
 
 def get_smtp_connection() -> smtplib.SMTP:
-    sender_email = SENDER_EMAIL
-    smtp_password = SMTP_PASSWORD
-
-    if not sender_email or not smtp_password:
-        raise RuntimeError("Missing SENDER_EMAIL or SMTP_PASSWORD environment variables")
+    if not SENDER_EMAIL or not SMTP_USERNAME or not SMTP_PASSWORD:
+        raise RuntimeError("Missing SENDER_EMAIL / SMTP_USERNAME / SMTP_PASSWORD")
 
     server = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
     server.starttls()
-    server.login(sender_email, smtp_password)
+    server.login(SMTP_USERNAME, SMTP_PASSWORD)
     return server
 
 
@@ -88,11 +80,12 @@ def dataframe_to_excel_bytes(df: pd.DataFrame, report_type: int) -> bytes:
 
 
 def send_report_email(report_type: int, xlsx_bytes: bytes) -> None:
-    sender_email = SENDER_EMAIL
+    if not SENDER_EMAIL:
+        raise RuntimeError("SENDER_EMAIL environment variable is not set")
 
     msg = EmailMessage()
     msg["Subject"] = f"Report tipo {report_type}"
-    msg["From"] = sender_email
+    msg["From"] = SENDER_EMAIL
     msg["To"] = RECIPIENT_EMAIL
     msg.set_content(f"Report tipo {report_type} in allegato.")
 
