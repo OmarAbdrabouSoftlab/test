@@ -9,9 +9,9 @@ from flask import Request, make_response
 
 SMTP_HOST = os.environ.get("SMTP_HOST", "email-smtp.eu-central-1.amazonaws.com")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
-SENDER_EMAIL = os.environ.get("SENDER_EMAIL")
-SMTP_USERNAME = os.environ.get("SMTP_USERNAME")
-SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD")
+SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "no-reply@hiop.it")
+SMTP_USERNAME = os.environ.get("SMTP_USERNAME", "AKIARAR4V6QHME42IQHU")
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "BEBM+YU21gJzy8SkL2WTG+ubr+yg6j6OELcmQ87H3xYE")
 RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL", "omar.abdrabou97@gmail.com")
 
 SHARED_COLS = [
