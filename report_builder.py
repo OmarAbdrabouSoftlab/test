@@ -2,8 +2,8 @@ import io
 import re
 import pandas as pd
 
-from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Tuple
+
 from openpyxl.styles import Alignment
 from openpyxl.utils import get_column_letter
 
@@ -17,10 +17,10 @@ _FORCE_NUMERIC_FORMAT_COLS = {
     "Delta_25vs24",
 }
 
-# Above this magnitude Excel will *not* store the number reliably as numeric anyway.
-# We preserve exact digits by writing as text.
-_TEXT_THRESHOLD_ABS = Decimal("1e15")
+# Excel loses integer precision beyond ~15 digits. Option A: store those as text.
+_TEXT_THRESHOLD_ABS = 1e15
 
+# Keep your requested formatting for "normal-sized" values
 _NUM_FORMAT_2DP = "#,##0.00"
 
 
@@ -96,28 +96,29 @@ def _merge_vertical_column(ws, df: pd.DataFrame, column_name: str) -> None:
     cell.alignment = Alignment(vertical="top")
 
 
-_NUMERIC_LIKE_RE = re.compile(r"^\s*([+-]?\d+)(?:[.,](\d+))?\s*$")
+def _coerce_nullable_int_series(s: pd.Series) -> pd.Series:
+    """
+    Convert to pandas nullable integer (Int64) without going through float.
+    Handles strings, blanks, NaN safely.
+    """
+    # Normalize common empties
+    s2 = s.replace(r"^\s*$", pd.NA, regex=True)
 
+    # to_numeric can produce floats if there are NaNs; forcing Int64 afterwards
+    # ensures we keep exact integers (or <NA>) and do not keep float values.
+    out = pd.to_numeric(s2, errors="coerce")
 
-def _parse_decimal_preserving_text(s: str) -> Decimal | None:
-    m = _NUMERIC_LIKE_RE.match(s)
-    if not m:
-        return None
-
-    int_part = m.group(1)
-    frac_part = m.group(2)
-
-    normalized = int_part
-    if frac_part is not None and frac_part != "":
-        normalized = f"{int_part}.{frac_part}"
-
-    try:
-        return Decimal(normalized)
-    except (InvalidOperation, ValueError):
-        return None
+    # If out is float because of NaNs, conversion to Int64 will keep exact ints and <NA>.
+    # NOTE: if there are true decimals, they will become <NA> here. That is intentional for these columns.
+    return out.astype("Int64")
 
 
 def _apply_client_numeric_formatting(ws, df: pd.DataFrame) -> None:
+    """
+    Option A:
+    - For very large integer magnitudes (>= 1e15): write as TEXT from the df integer value.
+    - Otherwise: keep numeric with a normal number format to avoid scientific notation.
+    """
     target_cols = [c for c in df.columns if c in _FORCE_NUMERIC_FORMAT_COLS]
     if not target_cols or df.empty:
         return
@@ -127,55 +128,32 @@ def _apply_client_numeric_formatting(ws, df: pd.DataFrame) -> None:
     start_row = 2
     end_row = start_row + len(df) - 1
 
+    # df is written without index, so row r corresponds to df row (r - 2)
     for col_name in target_cols:
         col_idx_1based = _get_col_idx_1based(df, col_name)
 
         for r in range(start_row, end_row + 1):
+            df_row = r - start_row  # 0-based within this sheet
+            v = df.iat[df_row, df.columns.get_loc(col_name)]
+
             cell = ws.cell(row=r, column=col_idx_1based)
-            v = cell.value
 
-            if v is None or v == "":
+            if pd.isna(v):
                 continue
 
-            if isinstance(v, str):
-                dec = _parse_decimal_preserving_text(v)
+            # v is Int64 scalar -> cast to Python int safely
+            iv = int(v)
 
-                # Not numeric-like -> keep as text
-                if dec is None:
-                    cell.value = v
-                    cell.number_format = "@"
-                    continue
-
-                # Too large to be safe as numeric in Excel -> keep exact digits as text
-                if abs(dec) >= _TEXT_THRESHOLD_ABS:
-                    cell.value = v.strip()
-                    cell.number_format = "@"
-                    continue
-
-                # Safe magnitude -> write as number + numeric format
-                # Excel stores numbers as float anyway; for this magnitude it is acceptable.
-                cell.value = float(dec)
+            if abs(iv) >= _TEXT_THRESHOLD_ABS:
+                # Preserve exact digits: write as text
+                cell.value = str(iv)
+                cell.number_format = "@"
+            else:
+                # Keep numeric and formatted (prevents E+ for "normal sized" values)
+                cell.value = float(iv)
                 cell.number_format = _NUM_FORMAT_2DP
-                continue
 
-            # If something upstream still produced int/float, protect large ones
-            if isinstance(v, (int, float)):
-                try:
-                    dec = Decimal(str(v))
-                except Exception:
-                    cell.number_format = "@"
-                    continue
-
-                if abs(dec) >= _TEXT_THRESHOLD_ABS:
-                    cell.value = str(v)
-                    cell.number_format = "@"
-                else:
-                    cell.number_format = _NUM_FORMAT_2DP
-                continue
-
-            # Fallback: preserve as text
-            cell.number_format = "@"
-
+        # Make the column readable
         col_letter = get_column_letter(col_idx_1based)
         current_width = ws.column_dimensions[col_letter].width
         ws.column_dimensions[col_letter].width = max(current_width or 0, 18)
@@ -188,15 +166,18 @@ def _to_excel_bytes(
 ) -> bytes:
     _ensure_unique_columns(df)
 
+    # Critical: make row mapping stable for formatting logic (r-2 indexing)
+    df_out = df.reset_index(drop=True)
+
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name=sheet_name)
+        df_out.to_excel(writer, index=False, sheet_name=sheet_name)
         ws = writer.sheets[sheet_name]
 
         if merge_column:
-            _merge_vertical_column(ws, df, merge_column)
+            _merge_vertical_column(ws, df_out, merge_column)
 
-        _apply_client_numeric_formatting(ws, df)
+        _apply_client_numeric_formatting(ws, df_out)
 
     buf.seek(0)
     return buf.read()
@@ -226,17 +207,20 @@ def _prepare_dataframe_for_report_type(
     df = df[ordered_source_columns].copy()
     _ensure_unique_columns(df)
 
-    for col in _FORCE_NUMERIC_FORMAT_COLS:
-        if col in df.columns:
-            df[col] = df[col].astype("string")
-
     numeric_fields = get_numeric_logical_fields(config, logical_fields)
     numeric_cols = [source_columns_map[f] for f in numeric_fields]
 
-    for col in numeric_cols:
-        if col in _FORCE_NUMERIC_FORMAT_COLS:
-            continue
+    # Split numeric conversion:
+    # - "High-risk" cols: parse as nullable Int64 to preserve exact digits.
+    # - Other numeric cols: normal numeric parsing is fine.
+    special_cols = [c for c in numeric_cols if c in _FORCE_NUMERIC_FORMAT_COLS]
+    normal_numeric_cols = [c for c in numeric_cols if c not in _FORCE_NUMERIC_FORMAT_COLS]
+
+    for col in normal_numeric_cols:
         df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    for col in special_cols:
+        df[col] = _coerce_nullable_int_series(df[col])
 
     roman = REPORT_TYPE_ROMAN[report_type]
     return df, input_yyyymmdd, roman
@@ -269,6 +253,7 @@ def build_report_excels_with_metadata(
             sheet_name="tipo_1",
             merge_column=rag_soc_col,
         )
+
         outputs.append((xlsx_bytes, input_yyyymmdd, roman, suffix))
 
     if not outputs:

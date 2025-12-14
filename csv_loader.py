@@ -16,6 +16,13 @@ REPORT_TYPE_ROMAN = {
     5: "V",
 }
 
+# Columns that must NEVER be parsed as float at CSV read-time (to preserve exact digits)
+_FORCE_TEXT_AT_READ_COLS = {
+    "Fatturato_lordo_sconto_cassa_25",
+    "Fatturato_lordo_sconto_cassa_24",
+    "Delta_25vs24",
+}
+
 
 def _get_input_prefix_uri(config: Dict[str, Any], source_name: str) -> str:
     bucket = os.environ.get("S3_BUCKET_NAME")
@@ -83,7 +90,7 @@ def _find_latest_csv_for_report_type(prefix_uri: str, report_type: int) -> Tuple
 def load_source_dataframe_for_report_type(
     config: Dict[str, Any],
     source_name: str,
-    report_type: int
+    report_type: int,
 ) -> Tuple[pd.DataFrame, str]:
     sources = config.get("sources", {})
     src_conf = sources.get(source_name, {})
@@ -98,6 +105,10 @@ def load_source_dataframe_for_report_type(
     latest_uri, latest_yyyymmdd = _find_latest_csv_for_report_type(prefix_uri, report_type)
     data_bytes = read_bytes_from_s3(latest_uri)
 
+    # Force the high-risk columns to string to avoid float rounding at ingestion time.
+    # If the columns are not present in a given CSV, pandas ignores extra dtype keys.
+    dtype_map = {c: "string" for c in _FORCE_TEXT_AT_READ_COLS}
+
     df = pd.read_csv(
         io.BytesIO(data_bytes),
         sep=delimiter,
@@ -105,7 +116,9 @@ def load_source_dataframe_for_report_type(
         header=0 if header_flag else None,
         decimal=decimal_sep,
         thousands=thousands_sep,
+        dtype=dtype_map,
+        # Keep default NA parsing; report_builder already handles blanks/NA safely.
     )
-    print("CSV COLUMNS:", list(df.columns))
 
+    print("CSV COLUMNS:", list(df.columns))
     return df, latest_yyyymmdd
