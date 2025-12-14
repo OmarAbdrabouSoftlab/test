@@ -14,71 +14,72 @@
   },
 
   "shared_fields": [
-    "fatt_lordo_sconto_cassa_anno_corrente",
-    "fatt_lordo_sconto_cassa_anno_precedente",
-    "delta_fatturato_assoluto",
-    "delta_fatturato_percentuale",
-    "portafoglio_ordini_da_evadere_anno_corrente"
+  "fatt_lordo_sconto_cassa_25",
+  "fatt_lordo_sconto_cassa_24",
+  "delta_25_vs_24",
+  "delta_perc_25_vs_24",
+  "ordinato_inevaso_2025"
   ],
 
   "fields": {
-    "fatt_lordo_sconto_cassa_anno_corrente": {
-      "source_column": "FATT_LORDO_SCONTO_CASSA_ANNO_CORR",
-      "label": "Fatturato lordo sconto cassa anno corrente",
-      "type": "number",
-      "required": true
-    },
-    "fatt_lordo_sconto_cassa_anno_precedente": {
-      "source_column": "FATT_LORDO_SCONTO_CASSA_ANNO_PREC",
-      "label": "Fatturato lordo sconto cassa anno precedente",
-      "type": "number",
-      "required": true
-    },
-    "delta_fatturato_assoluto": {
-      "source_column": "DELTA_FATTURATO",
-      "label": "Delta fatturato tra i due anni",
-      "type": "number",
-      "required": true
-    },
-    "delta_fatturato_percentuale": {
-      "source_column": "DELTA_FATTURATO_PERC",
-      "label": "Delta percentuale fatturato tra i due anni",
-      "type": "number",
-      "required": true
-    },
-    "portafoglio_ordini_da_evadere_anno_corrente": {
-      "source_column": "PORTA_ORD_EVAS_CORR",
-      "label": "Portafoglio ordini da evadere anno corrente",
-      "type": "number",
-      "required": false
-    },
+  "fatt_lordo_sconto_cassa_25": {
+    "source_column": "Fatturato_lordo_sconto_cassa_25",
+    "label": "Fatturato lordo sconto cassa 2025",
+    "type": "number",
+    "required": true
+  },
+  "fatt_lordo_sconto_cassa_24": {
+    "source_column": "Fatturato_lordo_sconto_cassa_24",
+    "label": "Fatturato lordo sconto cassa 2024",
+    "type": "number",
+    "required": true
+  },
+  "delta_25_vs_24": {
+    "source_column": "Delta_25vs24",
+    "label": "Delta 25 vs 24",
+    "type": "number",
+    "required": true
+  },
+  "delta_perc_25_vs_24": {
+    "source_column": "DeltaPerc_25vs24",
+    "label": "Delta percentuale 25 vs 24",
+    "type": "number",
+    "required": true
+  },
+  "ordinato_inevaso_2025": {
+    "source_column": "ORDINATO_INEVASO_2025",
+    "label": "Ordinato inevaso 2025",
+    "type": "number",
+    "required": false
+  },
 
-    "ragione_sociale": {
-      "source_column": "RAGIONE_SOCIALE",
-      "label": "Ragione sociale",
-      "type": "string",
-      "required": false
-    },
-    "gruppo_merceologico": {
-      "source_column": "GRUPPO_MERCEOLOGICO",
-      "label": "Gruppo merceologico",
-      "type": "string",
-      "required": false
-    },
+  "ragione_sociale": {
+    "source_column": "Ragione_Sociale",
+    "label": "Ragione sociale",
+    "type": "string",
+    "required": false
+  },
+  "gruppo_merceologico": {
+    "source_column": "Gruppo_Merceologico",
+    "label": "Gruppo merceologico",
+    "type": "string",
+    "required": false
+  }
+,
     "gruppo_commerciale": {
-      "source_column": "GRUPPO_COMMERCIALE",
+      "source_column": "Gruppo_Commerciale",
       "label": "Gruppo commerciale",
       "type": "string",
       "required": false
     },
     "agenzia_anagrafica": {
-      "source_column": "AGENZIA_ANAGRAFICA",
+      "source_column": "Agenzia_Anagrafica",
       "label": "Agenzia anagrafica",
       "type": "string",
       "required": false
     },
     "consorzio": {
-      "source_column": "CONSORZIO",
+      "source_column": "Consorzio",
       "label": "Consorzio",
       "type": "string",
       "required": false

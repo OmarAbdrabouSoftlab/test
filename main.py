@@ -1,131 +1,54 @@
-import io
+import datetime
 import os
-import smtplib
 
 import functions_framework
-import pandas as pd
-from email.message import EmailMessage
 from flask import Request, make_response
 
-SMTP_HOST = os.environ.get("SMTP_HOST", "email-smtp.eu-central-1.amazonaws.com")
-SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
-SENDER_EMAIL = os.environ.get("SENDER_EMAIL")
-SMTP_USERNAME = os.environ.get("SMTP_USERNAME")
-SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD")
-RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL")
+from mail_handling import send_report_email
+from report_builder import build_report_excel_with_metadata
+from report_schema import delete_s3_prefix, write_bytes_to_s3
 
-SHARED_COLS = [
-    "FATT_LORDO_SCONTO_CASSA_ANNO_CORR",
-    "FATT_LORDO_SCONTO_CASSA_ANNO_PREC",
-    "DELTA_FATTURATO",
-    "DELTA_FATTURATO_PERC",
-    "PORTA_ORD_EVAS_CORR",
-]
-
-TYPE_SPECIFIC_COLS = {
-    1: ["RAGIONE_SOCIALE", "GRUPPO_MERCEOLOGICO"],
-    2: ["GRUPPO_COMMERCIALE", "GRUPPO_MERCEOLOGICO"],
-    3: ["CONSORZIO", "GRUPPO_MERCEOLOGICO", "RAGIONE_SOCIALE"],
-    4: ["AGENZIA_ANAGRAFICA", "RAGIONE_SOCIALE"],
-    5: ["AGENZIA_ANAGRAFICA", "RAGIONE_SOCIALE", "GRUPPO_MERCEOLOGICO"],
-}
+S3_BUCKET_NAME = os.environ.get("S3_BUCKET_NAME", "report-eredi-maggi")
+S3_INPUT_PREFIX = os.environ.get("S3_INPUT_PREFIX", "Input/")
+S3_OUTPUT_PREFIX = os.environ.get("S3_OUTPUT_PREFIX", "Output/")
 
 
-def get_smtp_connection() -> smtplib.SMTP:
-    if not SENDER_EMAIL or not SMTP_USERNAME or not SMTP_PASSWORD:
-        raise RuntimeError("Missing SENDER_EMAIL / SMTP_USERNAME / SMTP_PASSWORD")
-
-    server = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
-    server.starttls()
-    server.login(SMTP_USERNAME, SMTP_PASSWORD)
-    return server
-
-
-def load_and_filter_dataframe(report_type: int) -> pd.DataFrame:
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    csv_path = os.path.join(base_dir, "test.csv")
-
-    df = pd.read_csv(
-        csv_path,
-        sep=";",
-        decimal=",",
-        thousands=".",
-        dtype={"report_type": "int64"},
-    )
-
-    df_filtered = df[df["report_type"] == report_type].copy()
-    if df_filtered.empty:
-        raise RuntimeError(f"No rows found for report_type={report_type}")
-
-    specific_cols = TYPE_SPECIFIC_COLS.get(report_type)
-    if not specific_cols:
-        raise RuntimeError(f"Unsupported report_type={report_type}")
-
-    cols_order = []
-    for col in specific_cols + SHARED_COLS + ["report_type"]:
-        if col in df_filtered.columns and col not in cols_order:
-            cols_order.append(col)
-
-    df_filtered = df_filtered[cols_order]
-    return df_filtered
-
-
-def dataframe_to_excel_bytes(df: pd.DataFrame, report_type: int) -> bytes:
-    buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
-        sheet_name = f"tipo_{report_type}"
-        df.to_excel(writer, index=False, sheet_name=sheet_name)
-    buffer.seek(0)
-    return buffer.read()
-
-
-def send_report_email(report_type: int, xlsx_bytes: bytes) -> None:
-    if not SENDER_EMAIL:
-        raise RuntimeError("SENDER_EMAIL environment variable is not set")
-
-    msg = EmailMessage()
-    msg["Subject"] = f"Report tipo {report_type}"
-    msg["From"] = SENDER_EMAIL
-    msg["To"] = RECIPIENT_EMAIL
-    msg.set_content(f"Report tipo {report_type} in allegato.")
-
-    filename = f"report_tipo_{report_type}.xlsx"
-    msg.add_attachment(
-        xlsx_bytes,
-        maintype="application",
-        subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        filename=filename,
-    )
-
-    server = get_smtp_connection()
-    try:
-        server.send_message(msg)
-    finally:
-        server.quit()
+def _as_s3_prefix_uri(bucket: str, key_prefix: str) -> str:
+    prefix = key_prefix.strip("/")
+    return f"s3://{bucket}/{prefix}/" if prefix else f"s3://{bucket}/"
 
 
 @functions_framework.http
 def generate_report(request: Request):
     try:
-        if request.method == "GET":
-            report_type_raw = request.args.get("report_type")
-        else:
-            body = request.get_json(silent=True) or {}
-            report_type_raw = body.get("report_type")
+        if not S3_BUCKET_NAME:
+            raise RuntimeError("Missing S3_BUCKET_NAME environment variable")
 
-        if not report_type_raw:
-            return make_response(("Missing 'report_type' parameter", 400))
+        today = datetime.date.today().strftime("%Y-%m-%d")
 
-        try:
-            report_type = int(report_type_raw)
-        except ValueError:
-            return make_response(("'report_type' must be an integer", 400))
+        output_base_uri = _as_s3_prefix_uri(S3_BUCKET_NAME, S3_OUTPUT_PREFIX)
+        output_today_uri = f"{output_base_uri}{today}/"
 
-        df = load_and_filter_dataframe(report_type)
-        xlsx_bytes = dataframe_to_excel_bytes(df, report_type)
-        send_report_email(report_type, xlsx_bytes)
+        delete_s3_prefix(output_today_uri)
 
-        return make_response((f"Report tipo {report_type} generated and emailed.", 200))
+        results = []
+        for report_type in (1, 2, 3, 4, 5):
+            xlsx_bytes, input_date_yyyymmdd, roman = build_report_excel_with_metadata(report_type)
+
+            output_filename = f"FT_BC_OC_REPORT_{roman}_{input_date_yyyymmdd}.xlsx"
+            output_uri = f"{output_today_uri}{output_filename}"
+
+            write_bytes_to_s3(
+                output_uri,
+                xlsx_bytes,
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+
+            results.append(f"{report_type}: {output_uri}")
+
+            # send_report_email(report_type, xlsx_bytes)
+
+        return make_response(("Reports generated:\n" + "\n".join(results), 200))
 
     except Exception as exc:
         return make_response((f"Internal error: {exc}", 500))
