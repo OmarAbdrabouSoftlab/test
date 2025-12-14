@@ -101,7 +101,7 @@ def load_config() -> Dict[str, Any]:
         return _CONFIG
     S3_BUCKET_NAME = os.environ.get("S3_BUCKET_NAME", "report-eredi-maggi")
     S3_CONFIG_PREFIX = os.environ.get("S3_CONFIG_PREFIX", "Config/")
-    config_uri = output_base_uri = _as_s3_prefix_uri(S3_BUCKET_NAME, S3_CONFIG_PREFIX)
+    config_uri = _as_s3_prefix_uri(S3_BUCKET_NAME, S3_CONFIG_PREFIX)
     if not config_uri:
         raise RuntimeError("Missing S3_CONFIG_PREFIX environment variable")
     raw_json = read_text_from_s3(config_uri)
