@@ -1,4 +1,5 @@
 import io
+import os
 import re
 from datetime import datetime
 
@@ -14,6 +15,27 @@ REPORT_TYPE_ROMAN = {
     4: "IV",
     5: "V",
 }
+
+
+def _get_input_prefix_uri(config: Dict[str, Any], source_name: str) -> str:
+    bucket = os.environ.get("S3_BUCKET_NAME")
+    input_prefix = os.environ.get("S3_INPUT_PREFIX")
+
+    if bucket and input_prefix:
+        prefix = input_prefix.strip("/")
+        return f"s3://{bucket}/{prefix}/" if prefix else f"s3://{bucket}/"
+
+    sources = config.get("sources", {})
+    if source_name not in sources:
+        raise KeyError(f"Source '{source_name}' not defined in config['sources']")
+
+    path = sources[source_name].get("path")
+    if not path:
+        raise RuntimeError(
+            "Missing S3 input path. Set env vars S3_BUCKET_NAME + S3_INPUT_PREFIX "
+            "or define sources[...].path in config."
+        )
+    return path
 
 
 def _find_latest_csv_for_report_type(prefix_uri: str, report_type: int) -> Tuple[str, str]:
@@ -63,12 +85,10 @@ def load_source_dataframe_for_report_type(
     source_name: str,
     report_type: int
 ) -> Tuple[pd.DataFrame, str]:
-    sources = config["sources"]
-    if source_name not in sources:
-        raise KeyError(f"Source '{source_name}' not defined in config['sources']")
+    sources = config.get("sources", {})
+    src_conf = sources.get(source_name, {})
 
-    src_conf = sources[source_name]
-    prefix_uri = src_conf["path"]
+    prefix_uri = _get_input_prefix_uri(config, source_name)
     delimiter = src_conf.get("delimiter", ",")
     encoding = src_conf.get("encoding", "utf-8")
     header_flag = src_conf.get("header", True)
@@ -86,5 +106,6 @@ def load_source_dataframe_for_report_type(
         decimal=decimal_sep,
         thousands=thousands_sep,
     )
+    print("CSV COLUMNS:", list(df.columns))
 
     return df, latest_yyyymmdd
