@@ -4,7 +4,7 @@ import os
 import functions_framework
 from flask import Request, make_response
 
-from report_builder import build_reports_excels_with_metadata
+from report_builder import build_report_excel_with_metadata
 from report_schema import delete_s3_prefix, write_bytes_to_s3
 
 S3_BUCKET_NAME = os.environ.get("S3_BUCKET_NAME")
@@ -35,7 +35,7 @@ def generate_report(request: Request):
 
         for report_type in (1, 2, 3, 4, 5):
             try:
-                outputs = build_reports_excels_with_metadata(report_type)
+                outputs = build_report_excel_with_metadata(report_type)
 
                 for xlsx_bytes, input_yyyymmdd, roman, suffix in outputs:
                     if report_type == 1:
