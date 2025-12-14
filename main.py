@@ -17,6 +17,9 @@ def _output_today_prefix_uri(bucket: str, output_prefix: str, today: str) -> str
         return f"s3://{bucket}/{prefix}/{today}/"
     return f"s3://{bucket}/{today}/"
 
+def _output_report_type_prefix_uri(output_today_uri: str, report_type: int) -> str:
+    base = output_today_uri.rstrip("/") + "/"
+    return f"{base}Report_Type_{report_type}/"
 
 @functions_framework.http
 def generate_report(request: Request):
@@ -37,13 +40,15 @@ def generate_report(request: Request):
             try:
                 outputs = build_report_excels_with_metadata(report_type)
 
+                output_report_type_uri = _output_report_type_prefix_uri(output_today_uri, report_type)
+
                 for xlsx_bytes, input_yyyymmdd, roman, suffix in outputs:
                     if report_type == 1:
                         output_filename = f"FT_BC_OC_REPORT_{roman}_{input_yyyymmdd}_{suffix}.xlsx"
                     else:
                         output_filename = f"FT_BC_OC_REPORT_{roman}_{input_yyyymmdd}.xlsx"
 
-                    output_uri = f"{output_today_uri}{output_filename}"
+                    output_uri = f"{output_report_type_uri}{output_filename}"
 
                     write_bytes_to_s3(
                         output_uri,
