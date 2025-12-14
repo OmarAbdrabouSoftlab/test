@@ -1,12 +1,11 @@
 import json
 import os
 import re
-import boto3
 
+import boto3
 from typing import Any, Dict, List, Optional, Tuple
 
 _S3_CLIENT: Optional[Any] = None
-_CONFIG: Optional[Dict[str, Any]] = None
 
 
 def get_s3_client():
@@ -65,8 +64,7 @@ def delete_s3_prefix(prefix_uri: str) -> None:
 
     batch: List[Dict[str, str]] = []
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-        contents = page.get("Contents", [])
-        for obj in contents:
+        for obj in page.get("Contents", []):
             batch.append({"Key": obj["Key"]})
             if len(batch) == 1000:
                 client.delete_objects(Bucket=bucket, Delete={"Objects": batch})
@@ -111,8 +109,7 @@ def get_latest_csv_uri(prefix_uri: str) -> str:
     latest_blob_key = None
 
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-        contents = page.get("Contents", [])
-        for obj in contents:
+        for obj in page.get("Contents", []):
             key = obj["Key"]
             if not key.lower().endswith(".csv"):
                 continue
@@ -134,10 +131,6 @@ def get_latest_csv_uri(prefix_uri: str) -> str:
 
 
 def load_config() -> Dict[str, Any]:
-    global _CONFIG
-    if _CONFIG is not None:
-        return _CONFIG
-
     bucket = os.environ.get("S3_BUCKET_NAME")
     prefix = os.environ.get("S3_CONFIG_PREFIX", "Config/")
     if not bucket:
@@ -151,8 +144,7 @@ def load_config() -> Dict[str, Any]:
     if not raw_stripped:
         raise RuntimeError(f"Config file is empty or unreadable: {config_uri}")
 
-    _CONFIG = json.loads(raw_stripped)
-    return _CONFIG
+    return json.loads(raw_stripped)
 
 
 def get_logical_fields_for_type(config: Dict[str, Any], report_type: int) -> List[str]:
@@ -163,6 +155,7 @@ def get_logical_fields_for_type(config: Dict[str, Any], report_type: int) -> Lis
         raise KeyError(f"Unknown report_type: {report_type}")
 
     specific = report_types[type_key]["specific_fields"]
+
     result: List[str] = []
     seen = set()
 
