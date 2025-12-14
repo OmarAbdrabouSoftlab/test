@@ -1,14 +1,72 @@
 import io
+import re
+from datetime import datetime
+
 import pandas as pd
+from typing import Any, Dict, Optional, Tuple
 
-from report_schema import get_latest_csv_uri, read_bytes_from_s3
-from typing import Any, Dict
+from report_schema import get_s3_client, parse_s3_uri, read_bytes_from_s3
+
+REPORT_TYPE_ROMAN = {
+    1: "I",
+    2: "II",
+    3: "III",
+    4: "IV",
+    5: "V",
+}
 
 
-def load_source_dataframe(config: Dict[str, Any], source_name: str) -> pd.DataFrame:
+def _find_latest_csv_for_report_type(prefix_uri: str, report_type: int) -> Tuple[str, str]:
+    roman = REPORT_TYPE_ROMAN.get(report_type)
+    if not roman:
+        raise RuntimeError(f"Unsupported report_type: {report_type}")
+
+    bucket, prefix = parse_s3_uri(prefix_uri)
+    prefix = prefix.rstrip("/") + "/"
+
+    file_prefix = f"{prefix}FT_BC_OC_REPORT_{roman}_"
+    pattern = re.compile(rf"FT_BC_OC_REPORT_{roman}_(\d{{8}})\.csv$", re.IGNORECASE)
+
+    client = get_s3_client()
+    paginator = client.get_paginator("list_objects_v2")
+
+    best_dt: Optional[datetime] = None
+    best_key: Optional[str] = None
+
+    for page in paginator.paginate(Bucket=bucket, Prefix=file_prefix):
+        for obj in page.get("Contents", []):
+            key = obj["Key"]
+            basename = key.rsplit("/", 1)[-1]
+            m = pattern.match(basename)
+            if not m:
+                continue
+
+            date_str = m.group(1)
+            try:
+                dt = datetime.strptime(date_str, "%Y%m%d")
+            except ValueError:
+                continue
+
+            if best_dt is None or dt > best_dt or (dt == best_dt and (best_key is None or key > best_key)):
+                best_dt = dt
+                best_key = key
+
+    if not best_key or not best_dt:
+        raise RuntimeError(f"No matching CSV found for report_type={report_type} under {prefix_uri}")
+
+    latest_uri = f"s3://{bucket}/{best_key}"
+    return latest_uri, best_dt.strftime("%Y%m%d")
+
+
+def load_source_dataframe_for_report_type(
+    config: Dict[str, Any],
+    source_name: str,
+    report_type: int
+) -> Tuple[pd.DataFrame, str]:
     sources = config["sources"]
     if source_name not in sources:
         raise KeyError(f"Source '{source_name}' not defined in config['sources']")
+
     src_conf = sources[source_name]
     prefix_uri = src_conf["path"]
     delimiter = src_conf.get("delimiter", ",")
@@ -16,14 +74,17 @@ def load_source_dataframe(config: Dict[str, Any], source_name: str) -> pd.DataFr
     header_flag = src_conf.get("header", True)
     decimal_sep = src_conf.get("decimal", ".")
     thousands_sep = src_conf.get("thousands", None)
-    latest_uri = get_latest_csv_uri(prefix_uri)
+
+    latest_uri, latest_yyyymmdd = _find_latest_csv_for_report_type(prefix_uri, report_type)
     data_bytes = read_bytes_from_s3(latest_uri)
+
     df = pd.read_csv(
         io.BytesIO(data_bytes),
         sep=delimiter,
         encoding=encoding,
         header=0 if header_flag else None,
         decimal=decimal_sep,
-        thousands=thousands_sep
+        thousands=thousands_sep,
     )
-    return df
+
+    return df, latest_yyyymmdd

@@ -1,7 +1,7 @@
-import boto3
 import json
 import os
 import re
+import boto3
 
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -46,7 +46,7 @@ def read_bytes_from_s3(uri: str) -> bytes:
     return obj["Body"].read()
 
 
-def write_bytes_to_s3(uri: str, data: bytes, content_type: str | None = None) -> None:
+def write_bytes_to_s3(uri: str, data: bytes, content_type: Optional[str] = None) -> None:
     client = get_s3_client()
     bucket, key = parse_s3_uri(uri)
     extra_args: Dict[str, Any] = {}
@@ -62,20 +62,54 @@ def delete_s3_prefix(prefix_uri: str) -> None:
     client = get_s3_client()
     bucket, prefix = parse_s3_uri(prefix_uri)
     paginator = client.get_paginator("list_objects_v2")
+
+    batch: List[Dict[str, str]] = []
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
         contents = page.get("Contents", [])
-        if not contents:
-            continue
-        delete_req = {"Objects": [{"Key": obj["Key"]} for obj in contents]}
-        client.delete_objects(Bucket=bucket, Delete=delete_req)
+        for obj in contents:
+            batch.append({"Key": obj["Key"]})
+            if len(batch) == 1000:
+                client.delete_objects(Bucket=bucket, Delete={"Objects": batch})
+                batch = []
+
+    if batch:
+        client.delete_objects(Bucket=bucket, Delete={"Objects": batch})
+
+
+def get_latest_json_uri(prefix_uri: str) -> str:
+    client = get_s3_client()
+    bucket, prefix = parse_s3_uri(prefix_uri)
+    paginator = client.get_paginator("list_objects_v2")
+
+    latest_key = None
+    latest_last_modified = None
+
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            key = obj["Key"]
+            if not key.lower().endswith(".json"):
+                continue
+            lm = obj.get("LastModified")
+            if latest_last_modified is None or (lm is not None and lm > latest_last_modified) or (
+                lm == latest_last_modified and (latest_key is None or key > latest_key)
+            ):
+                latest_last_modified = lm
+                latest_key = key
+
+    if not latest_key:
+        raise RuntimeError(f"No JSON found under {prefix_uri}")
+
+    return f"s3://{bucket}/{latest_key}"
 
 
 def get_latest_csv_uri(prefix_uri: str) -> str:
     client = get_s3_client()
     bucket, prefix = parse_s3_uri(prefix_uri)
     paginator = client.get_paginator("list_objects_v2")
+
     latest_key = None
     latest_blob_key = None
+
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
         contents = page.get("Contents", [])
         for obj in contents:
@@ -87,11 +121,15 @@ def get_latest_csv_uri(prefix_uri: str) -> str:
             if not m:
                 continue
             date_str = m.group(1)
-            if latest_key is None or date_str > latest_key or (date_str == latest_key and (latest_blob_key is None or key > latest_blob_key)):
+            if latest_key is None or date_str > latest_key or (
+                date_str == latest_key and (latest_blob_key is None or key > latest_blob_key)
+            ):
                 latest_key = date_str
                 latest_blob_key = key
+
     if latest_blob_key is None:
         raise RuntimeError(f"No CSV with yyyymmdd in name found under {prefix_uri}")
+
     return f"s3://{bucket}/{latest_blob_key}"
 
 
@@ -99,13 +137,21 @@ def load_config() -> Dict[str, Any]:
     global _CONFIG
     if _CONFIG is not None:
         return _CONFIG
-    S3_BUCKET_NAME = os.environ.get("S3_BUCKET_NAME", "report-eredi-maggi")
-    S3_CONFIG_PREFIX = os.environ.get("S3_CONFIG_PREFIX", "Config/")
-    config_uri = _as_s3_prefix_uri(S3_BUCKET_NAME, S3_CONFIG_PREFIX)
-    if not config_uri:
-        raise RuntimeError("Missing S3_CONFIG_PREFIX environment variable")
+
+    bucket = os.environ.get("S3_BUCKET_NAME")
+    prefix = os.environ.get("S3_CONFIG_PREFIX", "Config/")
+    if not bucket:
+        raise RuntimeError("Missing S3_BUCKET_NAME environment variable")
+
+    prefix_uri = _as_s3_prefix_uri(bucket, prefix)
+    config_uri = get_latest_json_uri(prefix_uri)
+
     raw_json = read_text_from_s3(config_uri)
-    _CONFIG = json.loads(raw_json)
+    raw_stripped = raw_json.strip()
+    if not raw_stripped:
+        raise RuntimeError(f"Config file is empty or unreadable: {config_uri}")
+
+    _CONFIG = json.loads(raw_stripped)
     return _CONFIG
 
 
@@ -115,34 +161,38 @@ def get_logical_fields_for_type(config: Dict[str, Any], report_type: int) -> Lis
     type_key = str(report_type)
     if type_key not in report_types:
         raise KeyError(f"Unknown report_type: {report_type}")
+
     specific = report_types[type_key]["specific_fields"]
     result: List[str] = []
     seen = set()
+
     for field in shared + specific:
         if field not in seen:
             seen.add(field)
             result.append(field)
+
     return result
 
 
-def get_source_columns_map(
-    config: Dict[str, Any],
-    logical_fields: List[str]
-) -> Dict[str, str]:
+def get_source_columns_map(config: Dict[str, Any], logical_fields: List[str]) -> Dict[str, str]:
     fields_def = config["fields"]
     result: Dict[str, str] = {}
+
     for lf in logical_fields:
         if lf not in fields_def:
             raise KeyError(f"Field '{lf}' not defined in config['fields']")
         result[lf] = fields_def[lf]["source_column"]
+
     return result
 
 
 def get_numeric_logical_fields(config: Dict[str, Any], logical_fields: List[str]) -> List[str]:
     fields_def = config["fields"]
     numeric_fields: List[str] = []
+
     for lf in logical_fields:
         field_conf = fields_def.get(lf, {})
         if field_conf.get("type") == "number":
             numeric_fields.append(lf)
+
     return numeric_fields
