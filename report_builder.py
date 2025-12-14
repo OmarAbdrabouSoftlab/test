@@ -2,9 +2,11 @@ import io
 import re
 import pandas as pd
 
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Tuple
 from openpyxl.styles import Alignment
 from openpyxl.utils import get_column_letter
+
 from csv_loader import REPORT_TYPE_ROMAN, load_source_dataframe_for_report_type
 from report_schema import get_numeric_logical_fields, get_source_columns_map, load_config
 
@@ -15,7 +17,10 @@ _FORCE_NUMERIC_FORMAT_COLS = {
     "Delta_25vs24",
 }
 
-_TEXT_THRESHOLD_ABS = 1e15
+# Above this magnitude Excel will *not* store the number reliably as numeric anyway.
+# We preserve exact digits by writing as text.
+_TEXT_THRESHOLD_ABS = Decimal("1e15")
+
 _NUM_FORMAT_2DP = "#,##0.00"
 
 
@@ -91,6 +96,27 @@ def _merge_vertical_column(ws, df: pd.DataFrame, column_name: str) -> None:
     cell.alignment = Alignment(vertical="top")
 
 
+_NUMERIC_LIKE_RE = re.compile(r"^\s*([+-]?\d+)(?:[.,](\d+))?\s*$")
+
+
+def _parse_decimal_preserving_text(s: str) -> Decimal | None:
+    m = _NUMERIC_LIKE_RE.match(s)
+    if not m:
+        return None
+
+    int_part = m.group(1)
+    frac_part = m.group(2)
+
+    normalized = int_part
+    if frac_part is not None and frac_part != "":
+        normalized = f"{int_part}.{frac_part}"
+
+    try:
+        return Decimal(normalized)
+    except (InvalidOperation, ValueError):
+        return None
+
+
 def _apply_client_numeric_formatting(ws, df: pd.DataFrame) -> None:
     target_cols = [c for c in df.columns if c in _FORCE_NUMERIC_FORMAT_COLS]
     if not target_cols or df.empty:
@@ -111,24 +137,44 @@ def _apply_client_numeric_formatting(ws, df: pd.DataFrame) -> None:
             if v is None or v == "":
                 continue
 
-            if isinstance(v, (int, float)) and abs(v) >= _TEXT_THRESHOLD_ABS:
-                if isinstance(v, float):
-                    s = format(v, ".15f").rstrip("0").rstrip(".")
-                else:
-                    s = str(v)
+            if isinstance(v, str):
+                dec = _parse_decimal_preserving_text(v)
 
-                cell.value = s
-                cell.number_format = "@"
-            else:
-                if isinstance(v, str):
-                    try:
-                        nv = float(v)
-                        cell.value = nv
-                    except Exception:
-                        cell.number_format = "@"
-                        continue
+                # Not numeric-like -> keep as text
+                if dec is None:
+                    cell.value = v
+                    cell.number_format = "@"
+                    continue
 
+                # Too large to be safe as numeric in Excel -> keep exact digits as text
+                if abs(dec) >= _TEXT_THRESHOLD_ABS:
+                    cell.value = v.strip()
+                    cell.number_format = "@"
+                    continue
+
+                # Safe magnitude -> write as number + numeric format
+                # Excel stores numbers as float anyway; for this magnitude it is acceptable.
+                cell.value = float(dec)
                 cell.number_format = _NUM_FORMAT_2DP
+                continue
+
+            # If something upstream still produced int/float, protect large ones
+            if isinstance(v, (int, float)):
+                try:
+                    dec = Decimal(str(v))
+                except Exception:
+                    cell.number_format = "@"
+                    continue
+
+                if abs(dec) >= _TEXT_THRESHOLD_ABS:
+                    cell.value = str(v)
+                    cell.number_format = "@"
+                else:
+                    cell.number_format = _NUM_FORMAT_2DP
+                continue
+
+            # Fallback: preserve as text
+            cell.number_format = "@"
 
         col_letter = get_column_letter(col_idx_1based)
         current_width = ws.column_dimensions[col_letter].width
@@ -180,10 +226,16 @@ def _prepare_dataframe_for_report_type(
     df = df[ordered_source_columns].copy()
     _ensure_unique_columns(df)
 
+    for col in _FORCE_NUMERIC_FORMAT_COLS:
+        if col in df.columns:
+            df[col] = df[col].astype("string")
+
     numeric_fields = get_numeric_logical_fields(config, logical_fields)
     numeric_cols = [source_columns_map[f] for f in numeric_fields]
 
     for col in numeric_cols:
+        if col in _FORCE_NUMERIC_FORMAT_COLS:
+            continue
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
     roman = REPORT_TYPE_ROMAN[report_type]
@@ -209,7 +261,6 @@ def build_report_excels_with_metadata(
     df_sorted = df.sort_values(by=[grp_mer_col], kind="mergesort")
 
     outputs: List[Tuple[bytes, str, str, str]] = []
-
     for ragione_sociale, df_group in df_sorted.groupby(rag_soc_col, dropna=False, sort=False):
         suffix = _sanitize_for_filename(ragione_sociale)
 
@@ -218,7 +269,6 @@ def build_report_excels_with_metadata(
             sheet_name="tipo_1",
             merge_column=rag_soc_col,
         )
-
         outputs.append((xlsx_bytes, input_yyyymmdd, roman, suffix))
 
     if not outputs:
