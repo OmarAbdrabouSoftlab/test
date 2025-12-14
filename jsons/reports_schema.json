@@ -3,7 +3,6 @@
 
   "sources": {
     "main_csv": {
-      "path": "s3://bucket_Hiop/Input/",
       "format": "csv",
       "delimiter": ";",
       "encoding": "utf-8",
