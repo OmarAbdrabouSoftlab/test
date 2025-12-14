@@ -4,7 +4,7 @@ import os
 import functions_framework
 from flask import Request, make_response
 
-from report_builder import build_report_excel_with_metadata
+from report_builder import build_reports_excels_with_metadata
 from report_schema import delete_s3_prefix, write_bytes_to_s3
 
 S3_BUCKET_NAME = os.environ.get("S3_BUCKET_NAME")
@@ -35,17 +35,23 @@ def generate_report(request: Request):
 
         for report_type in (1, 2, 3, 4, 5):
             try:
-                xlsx_bytes, input_yyyymmdd, roman = build_report_excel_with_metadata(report_type)
-                output_filename = f"FT_BC_OC_REPORT_{roman}_{input_yyyymmdd}.xlsx"
-                output_uri = f"{output_today_uri}{output_filename}"
+                outputs = build_reports_excels_with_metadata(report_type)
 
-                write_bytes_to_s3(
-                    output_uri,
-                    xlsx_bytes,
-                    content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                )
+                for xlsx_bytes, input_yyyymmdd, roman, suffix in outputs:
+                    if report_type == 1:
+                        output_filename = f"FT_BC_OC_REPORT_{roman}_{input_yyyymmdd}_{suffix}.xlsx"
+                    else:
+                        output_filename = f"FT_BC_OC_REPORT_{roman}_{input_yyyymmdd}.xlsx"
 
-                written.append(output_uri)
+                    output_uri = f"{output_today_uri}{output_filename}"
+
+                    write_bytes_to_s3(
+                        output_uri,
+                        xlsx_bytes,
+                        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+
+                    written.append(output_uri)
 
             except Exception as exc:
                 msg = str(exc)
