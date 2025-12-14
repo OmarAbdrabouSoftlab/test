@@ -6,17 +6,11 @@ from flask import Request, make_response
 
 from mail_handling import send_report_email
 from report_builder import build_report_excel_with_metadata
-from report_schema import delete_s3_prefix, write_bytes_to_s3
+from report_schema import delete_s3_prefix, write_bytes_to_s3, _as_s3_prefix_uri
 
 S3_BUCKET_NAME = os.environ.get("S3_BUCKET_NAME", "report-eredi-maggi")
 S3_INPUT_PREFIX = os.environ.get("S3_INPUT_PREFIX", "Input/")
 S3_OUTPUT_PREFIX = os.environ.get("S3_OUTPUT_PREFIX", "Output/")
-
-
-def _as_s3_prefix_uri(bucket: str, key_prefix: str) -> str:
-    prefix = key_prefix.strip("/")
-    return f"s3://{bucket}/{prefix}/" if prefix else f"s3://{bucket}/"
-
 
 @functions_framework.http
 def generate_report(request: Request):

@@ -16,6 +16,11 @@ def get_s3_client():
     return _S3_CLIENT
 
 
+def _as_s3_prefix_uri(bucket: str, key_prefix: str) -> str:
+    prefix = key_prefix.strip("/")
+    return f"s3://{bucket}/{prefix}/" if prefix else f"s3://{bucket}/"
+
+
 def parse_s3_uri(uri: str) -> Tuple[str, str]:
     if not uri.startswith("s3://"):
         raise ValueError(f"Invalid S3 URI: {uri}")
@@ -94,9 +99,11 @@ def load_config() -> Dict[str, Any]:
     global _CONFIG
     if _CONFIG is not None:
         return _CONFIG
-    config_uri = os.environ.get("CONFIG_S3_URI")
+    S3_BUCKET_NAME = os.environ.get("S3_BUCKET_NAME", "report-eredi-maggi")
+    S3_CONFIG_PREFIX = os.environ.get("S3_CONFIG_PREFIX", "Config/")
+    config_uri = output_base_uri = _as_s3_prefix_uri(S3_BUCKET_NAME, S3_CONFIG_PREFIX)
     if not config_uri:
-        raise RuntimeError("Missing CONFIG_S3_URI environment variable")
+        raise RuntimeError("Missing S3_CONFIG_PREFIX environment variable")
     raw_json = read_text_from_s3(config_uri)
     _CONFIG = json.loads(raw_json)
     return _CONFIG
