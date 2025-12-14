@@ -59,13 +59,6 @@ def _ensure_unique_columns(df: pd.DataFrame) -> None:
 
 
 def _get_col_idx_1based(df: pd.DataFrame, column_name: str) -> int:
-    """
-    Returns the 1-based column index for openpyxl.
-
-    We intentionally guard the return type of Index.get_loc(), which is
-    typed as int | slice | ndarray. In our pipeline we require unique
-    columns, so it must be int; otherwise we fail fast with a clear error.
-    """
     loc = df.columns.get_loc(column_name)
     if not isinstance(loc, int):
         raise ValueError(

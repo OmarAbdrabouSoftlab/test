@@ -3,3 +3,4 @@ flask
 pandas
 xlsxwriter
 boto3
+openpyxl
