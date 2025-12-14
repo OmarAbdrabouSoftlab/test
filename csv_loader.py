@@ -109,15 +109,21 @@ def load_source_dataframe_for_report_type(
     # If the columns are not present in a given CSV, pandas ignores extra dtype keys.
     dtype_map = {c: "string" for c in _FORCE_TEXT_AT_READ_COLS}
 
+    # df = pd.read_csv(
+    #     io.BytesIO(data_bytes),
+    #     sep=delimiter,
+    #     encoding=encoding,
+    #     header=0 if header_flag else None,
+    #     decimal=decimal_sep,
+    #     thousands=thousands_sep,
+    #     dtype=dtype_map,
+    # )
     df = pd.read_csv(
         io.BytesIO(data_bytes),
         sep=delimiter,
         encoding=encoding,
         header=0 if header_flag else None,
-        decimal=decimal_sep,
-        thousands=thousands_sep,
         dtype=dtype_map,
-        # Keep default NA parsing; report_builder already handles blanks/NA safely.
     )
 
     print("CSV COLUMNS:", list(df.columns))
