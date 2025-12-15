@@ -24,31 +24,31 @@
   "fatt_lordo_sconto_cassa_25": {
     "source_column": "Fatturato_lordo_sconto_cassa_25",
     "label": "Fatturato lordo sconto cassa 2025",
-    "type": "number",
+    "type": "string",
     "required": true
   },
   "fatt_lordo_sconto_cassa_24": {
     "source_column": "Fatturato_lordo_sconto_cassa_24",
     "label": "Fatturato lordo sconto cassa 2024",
-    "type": "number",
+    "type": "string",
     "required": true
   },
   "delta_25_vs_24": {
     "source_column": "Delta_25vs24",
     "label": "Delta 25 vs 24",
-    "type": "number",
+    "type": "string",
     "required": true
   },
   "delta_perc_25_vs_24": {
     "source_column": "DeltaPerc_25vs24",
     "label": "Delta percentuale 25 vs 24",
-    "type": "number",
+    "type": "string",
     "required": true
   },
   "ordinato_inevaso_2025": {
     "source_column": "ORDINATO_INEVASO_2025",
     "label": "Ordinato inevaso 2025",
-    "type": "number",
+    "type": "string",
     "required": false
   },
 
