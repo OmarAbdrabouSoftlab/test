@@ -70,6 +70,12 @@ def _get_col_idx_1based(df: pd.DataFrame, column_name: str) -> int:
     return loc + 1
 
 
+def _is_totals_row_value(v: Any) -> bool:
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return False
+    return str(v).strip().upper() == "TOTALE"
+
+
 def _merge_vertical_column(ws, df: pd.DataFrame, column_name: str) -> None:
     if column_name not in df.columns:
         return
@@ -81,6 +87,15 @@ def _merge_vertical_column(ws, df: pd.DataFrame, column_name: str) -> None:
     col_idx = _get_col_idx_1based(df, column_name)
     start_row = 2
     end_row = start_row + len(df) - 1
+
+    # If the last row is the totals row, do NOT merge into it,
+    # otherwise the "TOTALE" row becomes visually swallowed by the merge.
+    last_val = df.iloc[-1][column_name]
+    if _is_totals_row_value(last_val):
+        end_row -= 1
+
+    if end_row <= start_row:
+        return
 
     ws.merge_cells(
         start_row=start_row,
@@ -94,12 +109,6 @@ def _merge_vertical_column(ws, df: pd.DataFrame, column_name: str) -> None:
 
 
 def _parse_numeric_cell(value: Any) -> Any:
-    """
-    Parse numbers stored as strings, supporting:
-    - EU style: 1.234.567,89
-    - plain: 1234.56
-    - multiple-dot thousands: 7.298.877.514.822.880 (treated as integer)
-    """
     if value is None or (isinstance(value, str) and value.strip() == ""):
         return pd.NA
     if isinstance(value, (int, float)):
@@ -113,12 +122,12 @@ def _parse_numeric_cell(value: Any) -> Any:
         s = s.replace(",", ".")
         return pd.to_numeric(s, errors="coerce")
 
-    # Multiple dots, no comma: treat as thousands separators (integer-like)
+    # Many dots but no comma: treat last dot as decimal separator, prior dots as thousands
     if s.count(".") >= 2 and "," not in s:
-        s = s.replace(".", "")
+        parts = s.split(".")
+        s = "".join(parts[:-1]) + "." + parts[-1]
         return pd.to_numeric(s, errors="coerce")
 
-    # Standard: 1234.56 or 1234
     return pd.to_numeric(s, errors="coerce")
 
 
@@ -143,10 +152,15 @@ def _append_totals_row(df: pd.DataFrame, numeric_cols: List[str], label_col: str
         if c in df.columns:
             totals[c] = pd.to_numeric(df[c], errors="coerce").sum(skipna=True)
 
+    # Put the label in a visible column
+    target_label_col = None
     if label_col and label_col in df.columns:
-        totals[label_col] = "TOTALE"
+        target_label_col = label_col
     elif len(df.columns) > 0:
-        totals[df.columns[0]] = "TOTALE"
+        target_label_col = df.columns[0]
+
+    if target_label_col:
+        totals[target_label_col] = "TOTALE"
 
     return pd.concat([df, pd.DataFrame([totals])], ignore_index=True)
 
@@ -223,6 +237,14 @@ def _grouping_columns_for_report_type(config: Dict[str, Any], report_type: int) 
     return []
 
 
+def _choose_totals_label_col(df: pd.DataFrame, group_cols: List[str]) -> str | None:
+    # Put "TOTALE" into the first column that is NOT merged/grouped, so it stays visible.
+    for c in df.columns:
+        if c not in group_cols:
+            return c
+    return df.columns[0] if len(df.columns) else None
+
+
 def _prepare_dataframe_for_report_type(
     config: Dict[str, Any],
     report_type: int,
@@ -248,9 +270,7 @@ def _prepare_dataframe_for_report_type(
     _ensure_unique_columns(df)
 
     numeric_fields = get_numeric_logical_fields(config, logical_fields)
-    schema_numeric_cols = [source_columns_map[f] for f in numeric_fields]
-
-    numeric_cols = [c for c in schema_numeric_cols if c in _CLIENT_NUMERIC_2DP_COLS]
+    numeric_cols = [source_columns_map[f] for f in numeric_fields]
 
     df = _coerce_numeric_columns(df, numeric_cols)
 
@@ -265,31 +285,24 @@ def build_report_excels_with_metadata(
     df, input_yyyymmdd, roman, numeric_cols = _prepare_dataframe_for_report_type(config, report_type)
 
     group_cols = _grouping_columns_for_report_type(config, report_type)
-
     for gc in group_cols:
         if gc not in df.columns:
-            raise RuntimeError(
-                f"Report type {report_type} requires grouping column '{gc}' but it is missing"
-            )
+            raise RuntimeError(f"Report type {report_type} requires grouping column '{gc}' but it is missing")
 
     outputs: List[Tuple[bytes, str, str, str]] = []
 
+    # No grouping -> single file (still totals)
     if not group_cols:
-        df_out = _append_totals_row(
-            df,
-            numeric_cols=numeric_cols,
-            label_col=None,
-        )
-
+        df_out = _append_totals_row(df, numeric_cols, label_col=_choose_totals_label_col(df, group_cols))
         xlsx_bytes = _to_excel_bytes(
             df_out,
             sheet_name=f"tipo_{report_type}",
             merge_columns=[],
             numeric_cols=numeric_cols,
         )
-
         return [(xlsx_bytes, input_yyyymmdd, roman, "")]
 
+    # Grouping -> one file per group (each with totals)
     df_base = df.reset_index(drop=True)
 
     for keys, df_group in df_base.groupby(group_cols, dropna=False, sort=False):
@@ -298,12 +311,10 @@ def build_report_excels_with_metadata(
 
         suffix = "__".join(_sanitize_for_filename(k) for k in keys)
 
-        label_col = group_cols[-1]
-
         df_out = _append_totals_row(
             df_group,
             numeric_cols=numeric_cols,
-            label_col=label_col,
+            label_col=_choose_totals_label_col(df_group, group_cols),
         )
 
         xlsx_bytes = _to_excel_bytes(
