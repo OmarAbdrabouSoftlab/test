@@ -14,11 +14,11 @@ from report_schema import get_source_columns_map, load_config
 
 # Columns that must be rendered as NUMBERS in Excel with 2 decimals, using '.' as decimal separator in CSV.
 _CLIENT_NUMERIC_2DP_COLS = {
-    "DeltaPerc_25vs24",
-    "ORDINATO_INEVASO_2025",
-    "Fatturato_lordo_sconto_cassa_25",
-    "Fatturato_lordo_sconto_cassa_24",
-    "Delta_25vs24",
+    "Fatturato_lordo_sconto_cassa_CY",
+    "Fatturato_lordo_sconto_cassa_PY",
+    "Delta_CYvsPY",
+    "DeltaPerc_CYvsPY",
+    "ORDINATO_INEVASO_CY"
 }
 
 _NUM_FORMAT_2DP = "#,##0.00"
