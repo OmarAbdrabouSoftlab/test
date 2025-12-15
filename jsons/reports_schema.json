@@ -104,8 +104,8 @@
       "name": "Report tipo 3",
       "specific_fields": [
         "consorzio",
-        "gruppo_merceologico",
-        "ragione_sociale"
+        "ragione_sociale",
+        "gruppo_merceologico"        
       ]
     },
     "4": {
