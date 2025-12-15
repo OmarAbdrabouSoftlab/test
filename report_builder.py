@@ -23,6 +23,7 @@ _CLIENT_NUMERIC_2DP_COLS = {
 
 _NUM_FORMAT_2DP = "#,##0.00"
 _COL_WIDTH_NUM = 18
+_TOTAL_LABEL = "TOTALE"
 
 
 def _get_logical_fields_specific_first(config: Dict[str, Any], report_type: int) -> List[str]:
@@ -74,7 +75,17 @@ def _get_col_idx_1based(df: pd.DataFrame, column_name: str) -> int:
     return loc + 1
 
 
-def _merge_vertical_column(ws, df: pd.DataFrame, column_name: str) -> None:
+def _merge_vertical_column(
+    ws,
+    df: pd.DataFrame,
+    column_name: str,
+    *,
+    exclude_last_row: bool = False,
+) -> None:
+    """
+    Merge an entire column vertically from first data row to last data row.
+    If exclude_last_row=True, the last dataframe row is excluded (useful for totals row).
+    """
     if column_name not in df.columns:
         return
     if len(df) <= 1:
@@ -84,7 +95,12 @@ def _merge_vertical_column(ws, df: pd.DataFrame, column_name: str) -> None:
 
     col_idx = _get_col_idx_1based(df, column_name)
     start_row = 2
-    end_row = start_row + len(df) - 1
+
+    data_len = len(df) - (1 if exclude_last_row else 0)
+    if data_len <= 1:
+        return
+
+    end_row = start_row + data_len - 1
 
     ws.merge_cells(
         start_row=start_row,
@@ -104,8 +120,6 @@ def _parse_decimal_2dp(value: Any) -> Decimal | None:
     """
     if value is None:
         return None
-
-    # pandas "string" dtype can give <NA>
     if pd.isna(value):
         return None
 
@@ -113,7 +127,6 @@ def _parse_decimal_2dp(value: Any) -> Decimal | None:
     if not s:
         return None
 
-    # Expect '.' as decimal separator (no thousands handling here by design)
     try:
         d = Decimal(s)
     except (InvalidOperation, ValueError):
@@ -131,6 +144,42 @@ def _coerce_numeric_2dp_columns(df: pd.DataFrame) -> pd.DataFrame:
         if col in _CLIENT_NUMERIC_2DP_COLS:
             df[col] = df[col].map(_parse_decimal_2dp)
     return df
+
+
+def _append_totals_row(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Appends a totals row at the bottom, summing only _CLIENT_NUMERIC_2DP_COLS.
+    Non-numeric columns are left blank, except one label column gets 'TOTALE'.
+    """
+    if df.empty:
+        return df
+
+    totals: Dict[str, Any] = {c: None for c in df.columns}
+
+    # Pick a label column (first non-numeric column if possible, else first column).
+    label_col = next((c for c in df.columns if c not in _CLIENT_NUMERIC_2DP_COLS), df.columns[0])
+    totals[label_col] = _TOTAL_LABEL
+
+    for col in df.columns:
+        if col not in _CLIENT_NUMERIC_2DP_COLS:
+            continue
+
+        s = df[col]
+        total = Decimal("0.00")
+        for v in s:
+            if v is None or pd.isna(v):
+                continue
+            # v should be Decimal already; but be safe.
+            if isinstance(v, Decimal):
+                total += v
+            else:
+                parsed = _parse_decimal_2dp(v)
+                if parsed is not None:
+                    total += parsed
+
+        totals[col] = total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    return pd.concat([df, pd.DataFrame([totals])], ignore_index=True)
 
 
 def _apply_client_numeric_formatting(ws, df: pd.DataFrame) -> None:
@@ -152,7 +201,6 @@ def _apply_client_numeric_formatting(ws, df: pd.DataFrame) -> None:
 
         for r in range(start_row, end_row + 1):
             cell = ws.cell(row=r, column=col_idx_1based)
-            # If blank, keep blank; if numeric, apply format
             if cell.value is None or cell.value == "":
                 continue
             cell.number_format = _NUM_FORMAT_2DP
@@ -166,11 +214,14 @@ def _to_excel_bytes(
     df: pd.DataFrame,
     sheet_name: str,
     merge_column: str | None = None,
+    *,
+    add_totals_row: bool = False,
 ) -> bytes:
     _ensure_unique_columns(df)
 
-    # Stable row mapping / output
     df_out = df.reset_index(drop=True)
+    if add_totals_row:
+        df_out = _append_totals_row(df_out)
 
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
@@ -178,7 +229,12 @@ def _to_excel_bytes(
         ws = writer.sheets[sheet_name]
 
         if merge_column:
-            _merge_vertical_column(ws, df_out, merge_column)
+            _merge_vertical_column(
+                ws,
+                df_out,
+                merge_column,
+                exclude_last_row=add_totals_row,
+            )
 
         _apply_client_numeric_formatting(ws, df_out)
 
@@ -210,7 +266,6 @@ def _prepare_dataframe_for_report_type(
     df = df[ordered_source_columns].copy()
     _ensure_unique_columns(df)
 
-    # Convert only the known client numeric columns to Decimal(2dp).
     df = _coerce_numeric_2dp_columns(df)
 
     roman = REPORT_TYPE_ROMAN[report_type]
@@ -223,8 +278,15 @@ def build_report_excels_with_metadata(
     config: Dict[str, Any] = load_config()
     df, input_yyyymmdd, roman = _prepare_dataframe_for_report_type(config, report_type)
 
+    # Add totals row to all report types (including type 1 group files).
+    add_totals = True
+
     if report_type != 1:
-        xlsx_bytes = _to_excel_bytes(df, sheet_name=f"tipo_{report_type}")
+        xlsx_bytes = _to_excel_bytes(
+            df,
+            sheet_name=f"tipo_{report_type}",
+            add_totals_row=add_totals,
+        )
         return [(xlsx_bytes, input_yyyymmdd, roman, "")]
 
     rag_soc_col = config["fields"]["ragione_sociale"]["source_column"]
@@ -243,6 +305,7 @@ def build_report_excels_with_metadata(
             df_group,
             sheet_name="tipo_1",
             merge_column=rag_soc_col,
+            add_totals_row=add_totals,
         )
 
         outputs.append((xlsx_bytes, input_yyyymmdd, roman, suffix))
