@@ -1,9 +1,8 @@
 import io
 import re
+from typing import Any, Dict, List, Tuple, Optional
+
 import pandas as pd
-
-from typing import Any, Dict, List, Tuple
-
 from openpyxl.styles import Alignment
 from openpyxl.utils import get_column_letter
 
@@ -11,16 +10,7 @@ from csv_loader import REPORT_TYPE_ROMAN, load_source_dataframe_for_report_type
 from report_schema import get_numeric_logical_fields, get_source_columns_map, load_config
 
 
-_FORCE_NUMERIC_FORMAT_COLS = {
-    "Fatturato_lordo_sconto_cassa_25",
-    "Fatturato_lordo_sconto_cassa_24",
-    "Delta_25vs24",
-}
-
-# Excel loses integer precision beyond ~15 digits. Option A: store those as text.
-_TEXT_THRESHOLD_ABS = 1e15
-
-# Keep your requested formatting for "normal-sized" values
+# Excel number format to avoid scientific notation for normal numeric columns
 _NUM_FORMAT_2DP = "#,##0.00"
 
 
@@ -96,61 +86,81 @@ def _merge_vertical_column(ws, df: pd.DataFrame, column_name: str) -> None:
     cell.alignment = Alignment(vertical="top")
 
 
-def _coerce_nullable_int_series(s: pd.Series) -> pd.Series:
+def _parse_number_loose(raw: Any) -> Optional[float]:
     """
-    Convert to pandas nullable integer (Int64) without going through float.
-    Handles strings, blanks, NaN safely.
+    Robust numeric parser for strings coming from CSV (read as text).
+    Handles:
+      - Italian style: 1.234.567,89
+      - US style:     1,234,567.89
+      - Plain:        12345 / 12345.67 / 12345,67
+    Returns float or None if not parseable.
     """
-    # Normalize common empties
-    s2 = s.replace(r"^\s*$", pd.NA, regex=True)
+    if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+        return None
 
-    # to_numeric can produce floats if there are NaNs; forcing Int64 afterwards
-    # ensures we keep exact integers (or <NA>) and do not keep float values.
-    out = pd.to_numeric(s2, errors="coerce")
+    s = str(raw).strip()
+    if not s:
+        return None
 
-    # If out is float because of NaNs, conversion to Int64 will keep exact ints and <NA>.
-    # NOTE: if there are true decimals, they will become <NA> here. That is intentional for these columns.
-    return out.astype("Int64")
+    # normalize spaces
+    s = s.replace(" ", "")
+
+    # If both separators are present, decide decimal by last occurrence.
+    if "," in s and "." in s:
+        last_comma = s.rfind(",")
+        last_dot = s.rfind(".")
+        decimal_sep = "," if last_comma > last_dot else "."
+        thousands_sep = "." if decimal_sep == "," else ","
+        s = s.replace(thousands_sep, "")
+        s = s.replace(decimal_sep, ".")
+    else:
+        # Only one of them (or none)
+        if "," in s:
+            # Heuristic: if last group is 1-2 digits, treat comma as decimal, else thousands.
+            parts = s.split(",")
+            if len(parts) == 2 and len(parts[1]) in (1, 2):
+                s = s.replace(".", "")  # treat dots as thousands if present
+                s = s.replace(",", ".")
+            else:
+                s = s.replace(",", "")
+        elif "." in s:
+            parts = s.split(".")
+            if len(parts) == 2 and len(parts[1]) in (1, 2):
+                # decimal dot
+                s = s.replace(",", "")  # treat commas as thousands if present
+            else:
+                # thousands dots
+                s = s.replace(".", "")
+
+    try:
+        return float(s)
+    except ValueError:
+        return None
 
 
-def _apply_client_numeric_formatting(ws, df: pd.DataFrame) -> None:
+def _apply_numeric_column_formatting(ws, df_out: pd.DataFrame, numeric_columns: List[str]) -> None:
     """
-    Option A:
-    - For very large integer magnitudes (>= 1e15): write as TEXT from the df integer value.
-    - Otherwise: keep numeric with a normal number format to avoid scientific notation.
+    Formats only numeric columns (as per schema type=number) to avoid scientific notation.
+    Assumes df_out already contains numeric values in those columns.
     """
-    target_cols = [c for c in df.columns if c in _FORCE_NUMERIC_FORMAT_COLS]
-    if not target_cols or df.empty:
+    if df_out.empty or not numeric_columns:
         return
 
-    _ensure_unique_columns(df)
+    _ensure_unique_columns(df_out)
 
     start_row = 2
-    end_row = start_row + len(df) - 1
+    end_row = start_row + len(df_out) - 1
 
-    # df is written without index, so row r corresponds to df row (r - 2)
-    for col_name in target_cols:
-        col_idx_1based = _get_col_idx_1based(df, col_name)
+    for col_name in numeric_columns:
+        if col_name not in df_out.columns:
+            continue
+
+        col_idx_1based = _get_col_idx_1based(df_out, col_name)
 
         for r in range(start_row, end_row + 1):
-            df_row = r - start_row  # 0-based within this sheet
-            v = df.iat[df_row, df.columns.get_loc(col_name)]
-
             cell = ws.cell(row=r, column=col_idx_1based)
-
-            if pd.isna(v):
-                continue
-
-            # v is Int64 scalar -> cast to Python int safely
-            iv = int(v)
-
-            if abs(iv) >= _TEXT_THRESHOLD_ABS:
-                # Preserve exact digits: write as text
-                cell.value = str(iv)
-                cell.number_format = "@"
-            else:
-                # Keep numeric and formatted (prevents E+ for "normal sized" values)
-                cell.value = float(iv)
+            # If it's numeric, enforce a readable numeric format
+            if isinstance(cell.value, (int, float)) and cell.value is not None:
                 cell.number_format = _NUM_FORMAT_2DP
 
         # Make the column readable
@@ -162,11 +172,10 @@ def _apply_client_numeric_formatting(ws, df: pd.DataFrame) -> None:
 def _to_excel_bytes(
     df: pd.DataFrame,
     sheet_name: str,
+    numeric_columns: List[str],
     merge_column: str | None = None,
 ) -> bytes:
     _ensure_unique_columns(df)
-
-    # Critical: make row mapping stable for formatting logic (r-2 indexing)
     df_out = df.reset_index(drop=True)
 
     buf = io.BytesIO()
@@ -177,7 +186,7 @@ def _to_excel_bytes(
         if merge_column:
             _merge_vertical_column(ws, df_out, merge_column)
 
-        _apply_client_numeric_formatting(ws, df_out)
+        _apply_numeric_column_formatting(ws, df_out, numeric_columns)
 
     buf.seek(0)
     return buf.read()
@@ -186,7 +195,7 @@ def _to_excel_bytes(
 def _prepare_dataframe_for_report_type(
     config: Dict[str, Any],
     report_type: int,
-) -> Tuple[pd.DataFrame, str, str]:
+) -> Tuple[pd.DataFrame, str, str, List[str]]:
     logical_fields = _get_logical_fields_specific_first(config, report_type)
     source_columns_map = get_source_columns_map(config, logical_fields)
 
@@ -195,7 +204,6 @@ def _prepare_dataframe_for_report_type(
 
     ordered_source_columns = [source_columns_map[lf] for lf in logical_fields]
     missing = [c for c in ordered_source_columns if c not in df.columns]
-
     if missing:
         raise RuntimeError(
             "Source CSV is missing columns: "
@@ -207,33 +215,28 @@ def _prepare_dataframe_for_report_type(
     df = df[ordered_source_columns].copy()
     _ensure_unique_columns(df)
 
-    numeric_fields = get_numeric_logical_fields(config, logical_fields)
-    numeric_cols = [source_columns_map[f] for f in numeric_fields]
+    # Convert ONLY fields declared as numeric in the schema.
+    numeric_logical_fields = get_numeric_logical_fields(config, logical_fields)
+    numeric_source_columns = [source_columns_map[lf] for lf in numeric_logical_fields]
 
-    # Split numeric conversion:
-    # - "High-risk" cols: parse as nullable Int64 to preserve exact digits.
-    # - Other numeric cols: normal numeric parsing is fine.
-    special_cols = [c for c in numeric_cols if c in _FORCE_NUMERIC_FORMAT_COLS]
-    normal_numeric_cols = [c for c in numeric_cols if c not in _FORCE_NUMERIC_FORMAT_COLS]
-
-    for col in normal_numeric_cols:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    for col in special_cols:
-        df[col] = _coerce_nullable_int_series(df[col])
+    for col in numeric_source_columns:
+        # We read everything as string: parse robustly here.
+        df[col] = df[col].map(_parse_number_loose)
 
     roman = REPORT_TYPE_ROMAN[report_type]
-    return df, input_yyyymmdd, roman
+    return df, input_yyyymmdd, roman, numeric_source_columns
 
 
-def build_report_excels_with_metadata(
-    report_type: int,
-) -> List[Tuple[bytes, str, str, str]]:
+def build_report_excels_with_metadata(report_type: int) -> List[Tuple[bytes, str, str, str]]:
     config: Dict[str, Any] = load_config()
-    df, input_yyyymmdd, roman = _prepare_dataframe_for_report_type(config, report_type)
+    df, input_yyyymmdd, roman, numeric_source_columns = _prepare_dataframe_for_report_type(config, report_type)
 
     if report_type != 1:
-        xlsx_bytes = _to_excel_bytes(df, sheet_name=f"tipo_{report_type}")
+        xlsx_bytes = _to_excel_bytes(
+            df,
+            sheet_name=f"tipo_{report_type}",
+            numeric_columns=numeric_source_columns,
+        )
         return [(xlsx_bytes, input_yyyymmdd, roman, "")]
 
     rag_soc_col = config["fields"]["ragione_sociale"]["source_column"]
@@ -251,6 +254,7 @@ def build_report_excels_with_metadata(
         xlsx_bytes = _to_excel_bytes(
             df_group,
             sheet_name="tipo_1",
+            numeric_columns=numeric_source_columns,
             merge_column=rag_soc_col,
         )
 
