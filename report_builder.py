@@ -268,29 +268,43 @@ def build_report_excels_with_metadata(
 
     for gc in group_cols:
         if gc not in df.columns:
-            raise RuntimeError(f"Report type {report_type} requires grouping column '{gc}' but it is missing")
+            raise RuntimeError(
+                f"Report type {report_type} requires grouping column '{gc}' but it is missing"
+            )
+
+    outputs: List[Tuple[bytes, str, str, str]] = []
 
     if not group_cols:
-        df_out = _append_totals_row(df, numeric_cols, label_col=None)
+        df_out = _append_totals_row(
+            df,
+            numeric_cols=numeric_cols,
+            label_col=None,
+        )
+
         xlsx_bytes = _to_excel_bytes(
             df_out,
             sheet_name=f"tipo_{report_type}",
             merge_columns=[],
             numeric_cols=numeric_cols,
         )
+
         return [(xlsx_bytes, input_yyyymmdd, roman, "")]
 
-    outputs: List[Tuple[bytes, str, str, str]] = []
-    df_group_base = df.reset_index(drop=True)
+    df_base = df.reset_index(drop=True)
 
-    for keys, df_group in df_group_base.groupby(group_cols, dropna=False, sort=False):
+    for keys, df_group in df_base.groupby(group_cols, dropna=False, sort=False):
         if not isinstance(keys, tuple):
             keys = (keys,)
 
         suffix = "__".join(_sanitize_for_filename(k) for k in keys)
 
-        label_col = group_cols[-1] if group_cols else None
-        df_out = _append_totals_row(df_group, numeric_cols, label_col=label_col)
+        label_col = group_cols[-1]
+
+        df_out = _append_totals_row(
+            df_group,
+            numeric_cols=numeric_cols,
+            label_col=label_col,
+        )
 
         xlsx_bytes = _to_excel_bytes(
             df_out,
