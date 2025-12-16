@@ -1,14 +1,13 @@
 import datetime
 import os
-
 import functions_framework
-from flask import Request, make_response
 
+from flask import Request, make_response
 from report_builder import build_report_excels_with_metadata
 from report_schema import delete_s3_prefix, write_bytes_to_s3
 
 S3_BUCKET_NAME = os.environ.get("S3_BUCKET_NAME")
-S3_OUTPUT_PREFIX = os.environ.get("S3_OUTPUT_PREFIX", "Output/")
+S3_OUTPUT_PREFIX = os.environ.get("S3_OUTPUT_PREFIX")
 
 
 def _output_today_prefix_uri(bucket: str, output_prefix: str, today: str) -> str:
