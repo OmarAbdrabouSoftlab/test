@@ -1,10 +1,9 @@
 import io
 import re
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-
-import pandas as pd
 from typing import Any, Dict, List, Tuple
 
+import pandas as pd
 from openpyxl.styles import Alignment
 from openpyxl.utils import get_column_letter
 
@@ -12,7 +11,7 @@ from csv_loader import REPORT_TYPE_ROMAN, load_source_dataframe_for_report_type
 from report_schema import get_source_columns_map, load_config
 
 
-_CLIENT_NUMERIC_2DP_COLS = = {
+_CLIENT_NUMERIC_2DP_COLS = {
     "Fatturato_lordo_sconto_cassa_CY",
     "Fatturato_lordo_sconto_cassa_PY",
     "Delta_CYvsPY",
@@ -22,7 +21,7 @@ _CLIENT_NUMERIC_2DP_COLS = = {
 
 _NUM_FORMAT_2DP = "#,##0.00"
 _COL_WIDTH_NUM = 18
-_TOTAL_LABEL = "Totale"
+_TOTAL_LABEL = "TOTALE"
 
 
 def _get_logical_fields_specific_first(config: Dict[str, Any], report_type: int) -> List[str]:
@@ -112,6 +111,17 @@ def _merge_vertical_column(
     cell.alignment = Alignment(vertical="top")
 
 
+def _merge_vertical_columns(
+    ws,
+    df: pd.DataFrame,
+    column_names: List[str],
+    *,
+    exclude_last_row: bool = False,
+) -> None:
+    for col in column_names:
+        _merge_vertical_column(ws, df, col, exclude_last_row=exclude_last_row)
+
+
 def _parse_decimal_2dp(value: Any) -> Decimal | None:
     """
     Parse a CSV string ('.' decimal separator) into a Decimal rounded to 2 dp.
@@ -168,7 +178,6 @@ def _append_totals_row(df: pd.DataFrame) -> pd.DataFrame:
         for v in s:
             if v is None or pd.isna(v):
                 continue
-            # v should be Decimal already; but be safe.
             if isinstance(v, Decimal):
                 total += v
             else:
@@ -212,7 +221,7 @@ def _apply_client_numeric_formatting(ws, df: pd.DataFrame) -> None:
 def _to_excel_bytes(
     df: pd.DataFrame,
     sheet_name: str,
-    merge_column: str | None = None,
+    merge_columns: List[str] | None = None,
     *,
     add_totals_row: bool = False,
 ) -> bytes:
@@ -227,11 +236,11 @@ def _to_excel_bytes(
         df_out.to_excel(writer, index=False, sheet_name=sheet_name)
         ws = writer.sheets[sheet_name]
 
-        if merge_column:
-            _merge_vertical_column(
+        if merge_columns:
+            _merge_vertical_columns(
                 ws,
                 df_out,
-                merge_column,
+                merge_columns,
                 exclude_last_row=add_totals_row,
             )
 
@@ -239,6 +248,31 @@ def _to_excel_bytes(
 
     buf.seek(0)
     return buf.read()
+
+
+def _grouping_columns_for_report_type(config: Dict[str, Any], report_type: int) -> List[str]:
+    """
+    Returns *source column names* used for grouping:
+      - type 1: ragione_sociale
+      - type 3: consorzio, ragione_sociale
+      - type 4: agenzia_anagrafica
+      - type 5: agenzia_anagrafica, ragione_sociale
+      - others: no grouping
+    """
+    fields = config["fields"]
+
+    def sc(logical_name: str) -> str:
+        return fields[logical_name]["source_column"]
+
+    if report_type == 1:
+        return [sc("ragione_sociale")]
+    if report_type == 3:
+        return [sc("consorzio"), sc("ragione_sociale")]
+    if report_type == 4:
+        return [sc("agenzia_anagrafica")]
+    if report_type == 5:
+        return [sc("agenzia_anagrafica"), sc("ragione_sociale")]
+    return []
 
 
 def _prepare_dataframe_for_report_type(
@@ -279,36 +313,48 @@ def build_report_excels_with_metadata(
 
     add_totals = True
 
-    if report_type != 1:
+    group_cols = _grouping_columns_for_report_type(config, report_type)
+    for gc in group_cols:
+        if gc not in df.columns:
+            raise RuntimeError(f"Report type {report_type} requires grouping column '{gc}' but it is missing")
+
+    # No grouping -> single file
+    if not group_cols:
         xlsx_bytes = _to_excel_bytes(
             df,
             sheet_name=f"tipo_{report_type}",
+            merge_columns=None,
             add_totals_row=add_totals,
         )
         return [(xlsx_bytes, input_yyyymmdd, roman, "")]
 
-    rag_soc_col = config["fields"]["ragione_sociale"]["source_column"]
-    grp_mer_col = config["fields"]["gruppo_merceologico"]["source_column"]
-
-    if rag_soc_col not in df.columns or grp_mer_col not in df.columns:
-        raise RuntimeError(f"Type 1 requires columns '{rag_soc_col}' and '{grp_mer_col}'")
-
-    df_sorted = df.sort_values(by=[grp_mer_col], kind="mergesort")
+    # Type 1 keeps existing sort-by Gruppo_Merceologico behaviour (as before)
+    if report_type == 1:
+        grp_mer_col = config["fields"]["gruppo_merceologico"]["source_column"]
+        if grp_mer_col not in df.columns:
+            raise RuntimeError(f"Type 1 requires columns '{grp_mer_col}'")
+        df = df.sort_values(by=[grp_mer_col], kind="mergesort")
 
     outputs: List[Tuple[bytes, str, str, str]] = []
-    for ragione_sociale, df_group in df_sorted.groupby(rag_soc_col, dropna=False, sort=False):
-        suffix = _sanitize_for_filename(ragione_sociale)
+
+    df_base = df.reset_index(drop=True)
+    for keys, df_group in df_base.groupby(group_cols, dropna=False, sort=False):
+        if not isinstance(keys, tuple):
+            keys = (keys,)
+
+        suffix_parts = [_sanitize_for_filename(k) for k in keys]
+        suffix = "__".join(suffix_parts)
 
         xlsx_bytes = _to_excel_bytes(
             df_group,
-            sheet_name="tipo_1",
-            merge_column=rag_soc_col,
+            sheet_name=f"tipo_{report_type}",
+            merge_columns=group_cols,
             add_totals_row=add_totals,
         )
 
         outputs.append((xlsx_bytes, input_yyyymmdd, roman, suffix))
 
     if not outputs:
-        raise RuntimeError("Type 1: no output generated")
+        raise RuntimeError(f"Type {report_type}: no output generated")
 
     return outputs
