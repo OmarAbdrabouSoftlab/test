@@ -76,7 +76,7 @@ def _is_totals_row_value(v: Any) -> bool:
     return str(v).strip().upper() == "TOTALE"
 
 
-def _merge_vertical_column(ws, df: pd.DataFrame, column_name: str) -> None:
+def _merge_vertical_column(ws, df: pd.DataFrame, column_name: str, skip_last_row: bool = True) -> None:
     if column_name not in df.columns:
         return
     if len(df) <= 1:
@@ -85,14 +85,12 @@ def _merge_vertical_column(ws, df: pd.DataFrame, column_name: str) -> None:
     _ensure_unique_columns(df)
 
     col_idx = _get_col_idx_1based(df, column_name)
+
     start_row = 2
     end_row = start_row + len(df) - 1
 
-    # If the last row is the totals row, do NOT merge into it,
-    # otherwise the "TOTALE" row becomes visually swallowed by the merge.
-    last_val = df.iloc[-1][column_name]
-    if _is_totals_row_value(last_val):
-        end_row -= 1
+    if skip_last_row:
+        end_row -= 1   # ⬅️ NON includere la riga TOTALE
 
     if end_row <= start_row:
         return
@@ -104,8 +102,7 @@ def _merge_vertical_column(ws, df: pd.DataFrame, column_name: str) -> None:
         end_column=col_idx,
     )
 
-    cell = ws.cell(row=start_row, column=col_idx)
-    cell.alignment = Alignment(vertical="top")
+    ws.cell(row=start_row, column=col_idx).alignment = Alignment(vertical="top")
 
 
 def _parse_numeric_cell(value: Any) -> Any:
