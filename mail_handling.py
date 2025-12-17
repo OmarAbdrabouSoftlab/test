@@ -66,7 +66,7 @@ def send_report_email(
     xlsx_bytes: bytes,
 ) -> None:
     smtp_host = os.environ.get("SMTP_HOST")
-    smtp_port_raw = os.environ.get("SMTP_PORT", "587")
+    smtp_port_raw = os.environ.get("SMTP_PORT")
     smtp_user = os.environ.get("SMTP_USER")
     smtp_pass = os.environ.get("SMTP_PASSWORD")
     from_email = os.environ.get("SENDER_EMAIL")
@@ -74,7 +74,7 @@ def send_report_email(
     if not smtp_host:
         raise RuntimeError("Missing SMTP_HOST environment variable")
     if not from_email:
-        raise RuntimeError("Missing SMTP_FROM_EMAIL (or SMTP_USER) environment variable")
+        raise RuntimeError("Missing SENDER_EMAIL environment variable")
     if not recipients:
         raise RuntimeError("No recipients provided")
 

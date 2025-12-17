@@ -99,7 +99,7 @@ def generate_report(request: Request):
         today = datetime.date.today().strftime("%Y-%m-%d")
         output_today_uri = _output_today_prefix_uri(S3_BUCKET_NAME, S3_OUTPUT_PREFIX or "Output/", today)
 
-        delete_s3_prefix(output_today_uri)
+        # delete_s3_prefix(output_today_uri)
 
         written: List[str] = []
         skipped: List[str] = []
@@ -108,37 +108,37 @@ def generate_report(request: Request):
         report_meta: Dict[str, Tuple[str, str]] = {}
         produced_files: Dict[Tuple[str, str], bytes] = {}
 
-        for report_type_key in config_report_type_keys:
-            try:
-                outputs = build_report_excels_with_metadata(report_type_key)
-                output_report_type_uri = _output_report_type_prefix_uri(output_today_uri, report_type_key)
-
-                _, subtype, _ = _parse_report_type_key(report_type_key)
-
-                for xlsx_bytes, input_yyyymmdd, roman, suffix in outputs:
-                    report_meta.setdefault(report_type_key, (roman, input_yyyymmdd))
-
-                    prefix_token = f"{roman}_{subtype}" if subtype else roman
-                    file_suffix = f"_{suffix}" if suffix else ""
-                    output_filename = f"FT_BC_OC_REPORT_{prefix_token}_{input_yyyymmdd}{file_suffix}.xlsx"
-
-                    produced_files[(report_type_key, suffix or "")] = xlsx_bytes
-
-                    output_uri = f"{output_report_type_uri}{output_filename}"
-
-                    write_bytes_to_s3(
-                        output_uri,
-                        xlsx_bytes,
-                        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    )
-                    written.append(output_uri)
-
-            except Exception as exc:
-                msg = str(exc)
-                if "No matching CSV found for report_type" in msg:
-                    skipped.append(f"type {report_type_key}: {msg}")
-                else:
-                    failed.append(f"type {report_type_key}: {repr(exc)}")
+        # for report_type_key in config_report_type_keys:
+        #     try:
+        #         outputs = build_report_excels_with_metadata(report_type_key)
+        #         output_report_type_uri = _output_report_type_prefix_uri(output_today_uri, report_type_key)
+        #
+        #         _, subtype, _ = _parse_report_type_key(report_type_key)
+        #
+        #         for xlsx_bytes, input_yyyymmdd, roman, suffix in outputs:
+        #             report_meta.setdefault(report_type_key, (roman, input_yyyymmdd))
+        #
+        #             prefix_token = f"{roman}_{subtype}" if subtype else roman
+        #             file_suffix = f"_{suffix}" if suffix else ""
+        #             output_filename = f"FT_BC_OC_REPORT_{prefix_token}_{input_yyyymmdd}{file_suffix}.xlsx"
+        #
+        #             produced_files[(report_type_key, suffix or "")] = xlsx_bytes
+        #
+        #             output_uri = f"{output_report_type_uri}{output_filename}"
+        #
+        #             write_bytes_to_s3(
+        #                 output_uri,
+        #                 xlsx_bytes,
+        #                 content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        #             )
+        #             written.append(output_uri)
+        #
+        #     except Exception as exc:
+        #         msg = str(exc)
+        #         if "No matching CSV found for report_type" in msg:
+        #             skipped.append(f"type {report_type_key}: {msg}")
+        #         else:
+        #             failed.append(f"type {report_type_key}: {repr(exc)}")
 
         mail_sent: List[str] = []
         mail_failed: List[str] = []
