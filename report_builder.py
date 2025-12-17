@@ -1,7 +1,7 @@
 import io
 import re
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Union
 
 import pandas as pd
 from openpyxl.styles import Alignment
@@ -21,15 +21,32 @@ _CLIENT_NUMERIC_2DP_COLS = {
 
 _NUM_FORMAT_2DP = "#,##0.00"
 _COL_WIDTH_NUM = 18
-_TOTAL_LABEL = "TOTALE"
+_TOTAL_LABEL = "Totale"
 
 
-def _get_logical_fields_specific_first(config: Dict[str, Any], report_type: int) -> List[str]:
+def _parse_report_type_key(report_type: Union[int, str]) -> Tuple[int, str]:
+    if isinstance(report_type, int):
+        return report_type, str(report_type)
+
+    s = str(report_type).strip()
+    if not s:
+        raise KeyError("Empty report_type")
+
+    if "_" in s:
+        base_str, _ = s.split("_", 1)
+        base = int(base_str)
+        return base, s
+
+    base = int(s)
+    return base, s
+
+
+def _get_logical_fields_specific_first(config: Dict[str, Any], report_type: Union[int, str]) -> List[str]:
     report_types = config["report_types"]
-    type_key = str(report_type)
+    _, type_key = _parse_report_type_key(report_type)
 
     if type_key not in report_types:
-        raise KeyError(f"Unknown report_type: {report_type}")
+        raise KeyError(f"Unknown report_type: {type_key}")
 
     specific = report_types[type_key]["specific_fields"]
     shared = config["shared_fields"]
@@ -80,10 +97,6 @@ def _merge_vertical_column(
     *,
     exclude_last_row: bool = False,
 ) -> None:
-    """
-    Merge an entire column vertically from first data row to last data row.
-    If exclude_last_row=True, the last dataframe row is excluded (useful for totals row).
-    """
     if column_name not in df.columns:
         return
     if len(df) <= 1:
@@ -123,10 +136,6 @@ def _merge_vertical_columns(
 
 
 def _parse_decimal_2dp(value: Any) -> Decimal | None:
-    """
-    Parse a CSV string ('.' decimal separator) into a Decimal rounded to 2 dp.
-    Returns None for blanks/NaN/unparseable.
-    """
     if value is None:
         return None
     if pd.isna(value):
@@ -145,10 +154,6 @@ def _parse_decimal_2dp(value: Any) -> Decimal | None:
 
 
 def _coerce_numeric_2dp_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Converts the configured client numeric columns to Decimal(2dp) where present.
-    Leaves other columns untouched.
-    """
     for col in df.columns:
         if col in _CLIENT_NUMERIC_2DP_COLS:
             df[col] = df[col].map(_parse_decimal_2dp)
@@ -156,16 +161,11 @@ def _coerce_numeric_2dp_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _append_totals_row(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Appends a totals row at the bottom, summing only _CLIENT_NUMERIC_2DP_COLS.
-    Non-numeric columns are left blank, except one label column gets 'TOTALE'.
-    """
     if df.empty:
         return df
 
     totals: Dict[str, Any] = {c: None for c in df.columns}
 
-    # Pick a label column (first non-numeric column if possible, else first column).
     label_col = next((c for c in df.columns if c not in _CLIENT_NUMERIC_2DP_COLS), df.columns[0])
     totals[label_col] = _TOTAL_LABEL
 
@@ -191,10 +191,6 @@ def _append_totals_row(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _apply_client_numeric_formatting(ws, df: pd.DataFrame) -> None:
-    """
-    Applies Excel number formatting to the configured numeric columns.
-    Values are assumed to already be numeric (Decimal) or blank.
-    """
     target_cols = [c for c in df.columns if c in _CLIENT_NUMERIC_2DP_COLS]
     if not target_cols or df.empty:
         return
@@ -250,40 +246,42 @@ def _to_excel_bytes(
     return buf.read()
 
 
-def _grouping_columns_for_report_type(config: Dict[str, Any], report_type: int) -> List[str]:
-    """
-    Returns *source column names* used for grouping:
-      - type 1: ragione_sociale
-      - type 3: consorzio, ragione_sociale
-      - type 4: agenzia_anagrafica
-      - type 5: agenzia_anagrafica, ragione_sociale
-      - others: no grouping
-    """
+def _grouping_columns_for_report_type(config: Dict[str, Any], report_type: Union[int, str]) -> List[str]:
     fields = config["fields"]
 
     def sc(logical_name: str) -> str:
         return fields[logical_name]["source_column"]
 
-    if report_type == 1:
+    _, type_key = _parse_report_type_key(report_type)
+
+    if type_key == "1":
         return [sc("ragione_sociale")]
-    if report_type == 3:
+    if type_key == "2_C":
+        return [sc("consorzio")]
+    if type_key == "2_G":
+        return [sc("gruppo_commerciale")]
+    if type_key == "3_C":
         return [sc("consorzio"), sc("ragione_sociale")]
-    if report_type == 4:
+    if type_key == "3_G":
+        return [sc("gruppo_commerciale"), sc("ragione_sociale")]
+    if type_key == "4":
         return [sc("agenzia_anagrafica")]
-    if report_type == 5:
+    if type_key == "5":
         return [sc("agenzia_anagrafica"), sc("ragione_sociale")]
     return []
 
 
 def _prepare_dataframe_for_report_type(
     config: Dict[str, Any],
-    report_type: int,
+    report_type: Union[int, str],
 ) -> Tuple[pd.DataFrame, str, str]:
-    logical_fields = _get_logical_fields_specific_first(config, report_type)
+    base_type, type_key = _parse_report_type_key(report_type)
+
+    logical_fields = _get_logical_fields_specific_first(config, type_key)
     source_columns_map = get_source_columns_map(config, logical_fields)
 
-    source_name = config["report_types"][str(report_type)].get("source", "main_csv")
-    df, input_yyyymmdd = load_source_dataframe_for_report_type(config, source_name, report_type)
+    source_name = config["report_types"][type_key].get("source", "main_csv")
+    df, input_yyyymmdd = load_source_dataframe_for_report_type(config, source_name, type_key)
 
     ordered_source_columns = [source_columns_map[lf] for lf in logical_fields]
     missing = [c for c in ordered_source_columns if c not in df.columns]
@@ -301,12 +299,12 @@ def _prepare_dataframe_for_report_type(
 
     df = _coerce_numeric_2dp_columns(df)
 
-    roman = REPORT_TYPE_ROMAN[report_type]
+    roman = REPORT_TYPE_ROMAN[base_type]
     return df, input_yyyymmdd, roman
 
 
 def build_report_excels_with_metadata(
-    report_type: int,
+    report_type: Union[int, str],
 ) -> List[Tuple[bytes, str, str, str]]:
     config: Dict[str, Any] = load_config()
     df, input_yyyymmdd, roman = _prepare_dataframe_for_report_type(config, report_type)
@@ -318,18 +316,18 @@ def build_report_excels_with_metadata(
         if gc not in df.columns:
             raise RuntimeError(f"Report type {report_type} requires grouping column '{gc}' but it is missing")
 
-    # No grouping -> single file
+    base_type, type_key = _parse_report_type_key(report_type)
+
     if not group_cols:
         xlsx_bytes = _to_excel_bytes(
             df,
-            sheet_name=f"tipo_{report_type}",
+            sheet_name=f"tipo_{type_key}",
             merge_columns=None,
             add_totals_row=add_totals,
         )
         return [(xlsx_bytes, input_yyyymmdd, roman, "")]
 
-    # Type 1 keeps existing sort-by Gruppo_Merceologico behaviour (as before)
-    if report_type == 1:
+    if type_key == "1":
         grp_mer_col = config["fields"]["gruppo_merceologico"]["source_column"]
         if grp_mer_col not in df.columns:
             raise RuntimeError(f"Type 1 requires columns '{grp_mer_col}'")
@@ -347,7 +345,7 @@ def build_report_excels_with_metadata(
 
         xlsx_bytes = _to_excel_bytes(
             df_group,
-            sheet_name=f"tipo_{report_type}",
+            sheet_name=f"tipo_{type_key}",
             merge_columns=group_cols,
             add_totals_row=add_totals,
         )

@@ -1,6 +1,4 @@
 {
-  "version": "1.0",
-
   "sources": {
     "main_csv": {
       "format": "csv",
@@ -93,17 +91,32 @@
         "gruppo_merceologico"
       ]
     },
-    "2": {
+    "2_C": {
+      "name": "Report tipo 2",
+      "specific_fields": [
+        "consorzio",
+        "gruppo_merceologico"
+      ]
+    },
+    "2_G": {
       "name": "Report tipo 2",
       "specific_fields": [
         "gruppo_commerciale",
         "gruppo_merceologico"
       ]
     },
-    "3": {
+    "3_C": {
       "name": "Report tipo 3",
       "specific_fields": [
         "consorzio",
+        "ragione_sociale",
+        "gruppo_merceologico"        
+      ]
+    },
+    "3_G": {
+      "name": "Report tipo 3",
+      "specific_fields": [
+        "gruppo_commerciale",
         "ragione_sociale",
         "gruppo_merceologico"        
       ]

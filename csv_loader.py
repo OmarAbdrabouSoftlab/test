@@ -1,10 +1,11 @@
 import io
 import os
 import re
+from datetime import datetime
+from typing import Any, Dict, Optional, Tuple, Union
+
 import pandas as pd
 
-from datetime import datetime
-from typing import Any, Dict, Optional, Tuple
 from report_schema import get_s3_client, parse_s3_uri, read_bytes_from_s3
 
 
@@ -15,6 +16,23 @@ REPORT_TYPE_ROMAN = {
     4: "IV",
     5: "V",
 }
+
+
+def _parse_report_type_key(report_type: Union[int, str]) -> Tuple[int, Optional[str]]:
+    if isinstance(report_type, int):
+        return report_type, None
+
+    s = str(report_type).strip()
+    if not s:
+        raise RuntimeError("Empty report_type")
+
+    if "_" in s:
+        base_str, subtype = s.split("_", 1)
+        base = int(base_str)
+        subtype = subtype.strip() or None
+        return base, subtype
+
+    return int(s), None
 
 
 def _get_input_prefix_uri(config: Dict[str, Any], source_name: str) -> str:
@@ -42,21 +60,29 @@ def _get_input_prefix_uri(config: Dict[str, Any], source_name: str) -> str:
 
 def _find_latest_csv_for_report_type(
     prefix_uri: str,
-    report_type: int,
+    report_type: Union[int, str],
 ) -> Tuple[str, str]:
-    
-    roman = REPORT_TYPE_ROMAN.get(report_type)
+    base_type, subtype = _parse_report_type_key(report_type)
+
+    roman = REPORT_TYPE_ROMAN.get(base_type)
     if not roman:
         raise RuntimeError(f"Unsupported report_type: {report_type}")
 
     bucket, prefix = parse_s3_uri(prefix_uri)
     prefix = prefix.rstrip("/") + "/"
 
-    file_prefix = f"{prefix}FT_BC_OC_REPORT_{roman}_"
-    pattern = re.compile(
-        rf"FT_BC_OC_REPORT_{roman}_(\d{{8}})\.csv$",
-        re.IGNORECASE,
-    )
+    if subtype:
+        file_prefix = f"{prefix}FT_BC_OC_REPORT_{roman}_{subtype}_"
+        pattern = re.compile(
+            rf"FT_BC_OC_REPORT_{roman}_{re.escape(subtype)}_(\d{{8}})\.csv$",
+            re.IGNORECASE,
+        )
+    else:
+        file_prefix = f"{prefix}FT_BC_OC_REPORT_{roman}_"
+        pattern = re.compile(
+            rf"FT_BC_OC_REPORT_{roman}_(\d{{8}})\.csv$",
+            re.IGNORECASE,
+        )
 
     client = get_s3_client()
     paginator = client.get_paginator("list_objects_v2")
@@ -97,9 +123,8 @@ def _find_latest_csv_for_report_type(
 def load_source_dataframe_for_report_type(
     config: Dict[str, Any],
     source_name: str,
-    report_type: int,
+    report_type: Union[int, str],
 ) -> Tuple[pd.DataFrame, str]:
-
     sources = config.get("sources", {})
     src_conf = sources.get(source_name, {})
 
@@ -108,11 +133,7 @@ def load_source_dataframe_for_report_type(
     encoding = src_conf.get("encoding", "utf-8")
     header_flag = src_conf.get("header", True)
 
-    latest_uri, input_yyyymmdd = _find_latest_csv_for_report_type(
-        prefix_uri,
-        report_type,
-    )
-
+    latest_uri, input_yyyymmdd = _find_latest_csv_for_report_type(prefix_uri, report_type)
     data_bytes = read_bytes_from_s3(latest_uri)
 
     df = pd.read_csv(
