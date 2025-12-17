@@ -91,21 +91,21 @@
         "gruppo_merceologico"
       ]
     },
-    "2_C": {
+    "2_CONS": {
       "name": "Report tipo 2",
       "specific_fields": [
         "consorzio",
         "gruppo_merceologico"
       ]
     },
-    "2_G": {
+    "2_GRUPPO": {
       "name": "Report tipo 2",
       "specific_fields": [
         "gruppo_commerciale",
         "gruppo_merceologico"
       ]
     },
-    "3_C": {
+    "3_CONS": {
       "name": "Report tipo 3",
       "specific_fields": [
         "consorzio",
@@ -113,7 +113,7 @@
         "gruppo_merceologico"        
       ]
     },
-    "3_G": {
+    "3_GRUPPO": {
       "name": "Report tipo 3",
       "specific_fields": [
         "gruppo_commerciale",

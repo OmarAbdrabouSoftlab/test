@@ -256,13 +256,13 @@ def _grouping_columns_for_report_type(config: Dict[str, Any], report_type: Union
 
     if type_key == "1":
         return [sc("ragione_sociale")]
-    if type_key == "2_C":
+    if type_key == "2_CONS":
         return [sc("consorzio")]
-    if type_key == "2_G":
+    if type_key == "2_GRUPPO":
         return [sc("gruppo_commerciale")]
-    if type_key == "3_C":
+    if type_key == "3_CONS":
         return [sc("consorzio"), sc("ragione_sociale")]
-    if type_key == "3_G":
+    if type_key == "3_GRUPPO":
         return [sc("gruppo_commerciale"), sc("ragione_sociale")]
     if type_key == "4":
         return [sc("agenzia_anagrafica")]

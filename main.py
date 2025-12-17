@@ -88,7 +88,7 @@ def generate_report(request: Request):
         skipped: List[str] = []
         failed: List[str] = []
 
-        report_meta: Dict[str, Tuple[str, str, str]] = {}
+        report_meta: Dict[str, Tuple[str, str]] = {}
         produced_files: Dict[Tuple[str, str], bytes] = {}
 
         for report_type_key in config_report_type_keys:
@@ -96,10 +96,10 @@ def generate_report(request: Request):
                 outputs = build_report_excels_with_metadata(report_type_key)
                 output_report_type_uri = _output_report_type_prefix_uri(output_today_uri, report_type_key)
 
-                base, subtype, _ = _parse_report_type_key(report_type_key)
+                _, subtype, _ = _parse_report_type_key(report_type_key)
 
                 for xlsx_bytes, input_yyyymmdd, roman, suffix in outputs:
-                    report_meta.setdefault(report_type_key, (roman, input_yyyymmdd, suffix))
+                    report_meta.setdefault(report_type_key, (roman, input_yyyymmdd))
 
                     prefix_token = f"{roman}_{subtype}" if subtype else roman
                     file_suffix = f"_{suffix}" if suffix else ""
@@ -125,49 +125,6 @@ def generate_report(request: Request):
 
         mail_sent: List[str] = []
         mail_failed: List[str] = []
-
-        # try:
-        #     emails_map = load_client_emails()
-
-        #     for tipo_report, clients in emails_map.items():
-        #         target_keys = _report_type_keys_for_tipo_report(tipo_report, config_report_type_keys)
-        #         if not target_keys:
-        #             continue
-
-        #         for client_id, recipients in clients.items():
-        #             if not recipients:
-        #                 continue
-
-        #             suffix = _sanitize_for_filename(client_id)
-
-        #             for report_type_key in target_keys:
-        #                 if report_type_key not in report_meta:
-        #                     continue
-
-        #                 xlsx_bytes = produced_files.get((report_type_key, suffix))
-        #                 if not xlsx_bytes:
-        #                     mail_failed.append(
-        #                         f"Missing output for tipo_report={tipo_report}, report_type={report_type_key}, client_id={client_id}"
-        #                     )
-        #                     continue
-
-        #                 try:
-        #                     base, _, _ = _parse_report_type_key(report_type_key)
-        #                     send_report_email(
-        #                         recipients=recipients,
-        #                         report_type=base,
-        #                         xlsx_bytes=xlsx_bytes,
-        #                     )
-        #                     mail_sent.append(
-        #                         f"sent tipo_report={tipo_report} report_type={report_type_key} client_id={client_id} to {', '.join(recipients)}"
-        #                     )
-        #                 except Exception as exc:
-        #                     mail_failed.append(
-        #                         f"Email failed tipo_report={tipo_report} report_type={report_type_key} client_id={client_id}: {repr(exc)}"
-        #                     )
-
-        # except Exception as exc:
-        #     mail_failed.append(f"Email phase failed to start: {repr(exc)}")
 
         lines: List[str] = []
         lines.append(f"output_prefix: {output_today_uri}")
