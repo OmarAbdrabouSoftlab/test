@@ -18,7 +18,7 @@ REPORT_TYPE_ROMAN = {
 }
 
 
-def _parse_report_type_key(report_type: Union[int, str]) -> Tuple[int, Optional[str]]:
+def parse_report_type_key(report_type: Union[int, str]) -> Tuple[int, Optional[str]]:
     if isinstance(report_type, int):
         return report_type, None
 
@@ -62,7 +62,7 @@ def _find_latest_csv_for_report_type(
     prefix_uri: str,
     report_type: Union[int, str],
 ) -> Tuple[str, str]:
-    base_type, subtype = _parse_report_type_key(report_type)
+    base_type, subtype = parse_report_type_key(report_type)
 
     roman = REPORT_TYPE_ROMAN.get(base_type)
     if not roman:

@@ -24,7 +24,7 @@ _COL_WIDTH_NUM = 18
 _TOTAL_LABEL = "Totale"
 
 
-def _parse_report_type_key(report_type: Union[int, str]) -> Tuple[int, str]:
+def parse_report_type_key(report_type: Union[int, str]) -> Tuple[int, str]:
     if isinstance(report_type, int):
         return report_type, str(report_type)
 
@@ -43,7 +43,7 @@ def _parse_report_type_key(report_type: Union[int, str]) -> Tuple[int, str]:
 
 def _get_logical_fields_specific_first(config: Dict[str, Any], report_type: Union[int, str]) -> List[str]:
     report_types = config["report_types"]
-    _, type_key = _parse_report_type_key(report_type)
+    _, type_key = parse_report_type_key(report_type)
 
     if type_key not in report_types:
         raise KeyError(f"Unknown report_type: {type_key}")
@@ -62,7 +62,7 @@ def _get_logical_fields_specific_first(config: Dict[str, Any], report_type: Unio
     return result
 
 
-def _sanitize_for_filename(value: Any) -> str:
+def sanitize_for_filename(value: Any) -> str:
     s = "" if value is None else str(value)
     s = s.strip()
     if not s:
@@ -252,7 +252,7 @@ def _grouping_columns_for_report_type(config: Dict[str, Any], report_type: Union
     def sc(logical_name: str) -> str:
         return fields[logical_name]["source_column"]
 
-    _, type_key = _parse_report_type_key(report_type)
+    _, type_key = parse_report_type_key(report_type)
 
     if type_key == "1":
         return [sc("ragione_sociale")]
@@ -275,7 +275,7 @@ def _prepare_dataframe_for_report_type(
     config: Dict[str, Any],
     report_type: Union[int, str],
 ) -> Tuple[pd.DataFrame, str, str]:
-    base_type, type_key = _parse_report_type_key(report_type)
+    base_type, type_key = parse_report_type_key(report_type)
 
     logical_fields = _get_logical_fields_specific_first(config, type_key)
     source_columns_map = get_source_columns_map(config, logical_fields)
@@ -316,7 +316,7 @@ def build_report_excels_with_metadata(
         if gc not in df.columns:
             raise RuntimeError(f"Report type {report_type} requires grouping column '{gc}' but it is missing")
 
-    base_type, type_key = _parse_report_type_key(report_type)
+    base_type, type_key = parse_report_type_key(report_type)
 
     if not group_cols:
         xlsx_bytes = _to_excel_bytes(
@@ -340,7 +340,7 @@ def build_report_excels_with_metadata(
         if not isinstance(keys, tuple):
             keys = (keys,)
 
-        suffix_parts = [_sanitize_for_filename(k) for k in keys]
+        suffix_parts = [sanitize_for_filename(k) for k in keys]
         suffix = "__".join(suffix_parts)
 
         xlsx_bytes = _to_excel_bytes(
