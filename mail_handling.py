@@ -70,11 +70,11 @@ def send_report_email(
     # smtp_user = os.environ.get("SMTP_USER")
     # smtp_pass = os.environ.get("SMTP_PASSWORD")
     # from_email = os.environ.get("SENDER_EMAIL")
-    smtp_host = os.environ.get("email-smtp.eu-central-1.amazonaws.com")
-    smtp_port_raw = os.environ.get("587")
-    smtp_user = os.environ.get("AKIARAR4V6QHME42IQHU")
-    smtp_pass = os.environ.get("BEBM+YU21gJzy8SkL2WTG+ubr+yg6j6OELcmQ87H3xYE")
-    from_email = os.environ.get("no-reply@hiop.it")
+    smtp_host = "email-smtp.eu-central-1.amazonaws.com"
+    smtp_port_raw = "587"
+    smtp_user = "AKIARAR4V6QHME42IQHU"
+    smtp_pass = "BEBM+YU21gJzy8SkL2WTG+ubr+yg6j6OELcmQ87H3xYE"
+    from_email = "no-reply@hiop.it"
 
 
     if not smtp_host:
