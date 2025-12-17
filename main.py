@@ -97,7 +97,9 @@ def generate_report(request: Request):
         config_report_type_keys = list((config.get("report_types") or {}).keys())
 
         today = datetime.date.today().strftime("%Y-%m-%d")
-        output_today_uri = _output_today_prefix_uri(S3_BUCKET_NAME, S3_OUTPUT_PREFIX or "Output/", today)
+        # output_today_uri = _output_today_prefix_uri(S3_BUCKET_NAME, S3_OUTPUT_PREFIX or "Output/", today)
+        output_today_uri = "s3://report-eredi-maggi/Output/2025-12-17/Report_Type_2_CONS/"
+
 
         # delete_s3_prefix(output_today_uri)
 
