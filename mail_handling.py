@@ -70,7 +70,6 @@ def send_report_email(
     smtp_user = os.environ.get("SMTP_USER")
     # smtp_pass = os.environ.get("SMTP_PASSWORD")
     from_email = os.environ.get("SENDER_EMAIL")
-    smtp_user = "AKIARAR4V6QHME42IQHU"
     smtp_pass = "BEBM+YU21gJzy8SkL2WTG+ubr+yg6j6OELcmQ87H3xYE"
 
 
