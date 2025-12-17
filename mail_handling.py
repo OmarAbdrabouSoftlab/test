@@ -65,11 +65,17 @@ def send_report_email(
     attachment_filename: str,
     xlsx_bytes: bytes,
 ) -> None:
-    smtp_host = os.environ.get("SMTP_HOST")
-    smtp_port_raw = os.environ.get("SMTP_PORT")
-    smtp_user = os.environ.get("SMTP_USER")
-    smtp_pass = os.environ.get("SMTP_PASSWORD")
-    from_email = os.environ.get("SENDER_EMAIL")
+    # smtp_host = os.environ.get("SMTP_HOST")
+    # smtp_port_raw = os.environ.get("SMTP_PORT")
+    # smtp_user = os.environ.get("SMTP_USER")
+    # smtp_pass = os.environ.get("SMTP_PASSWORD")
+    # from_email = os.environ.get("SENDER_EMAIL")
+    smtp_host = os.environ.get("email-smtp.eu-central-1.amazonaws.com")
+    smtp_port_raw = os.environ.get("587")
+    smtp_user = os.environ.get("AKIARAR4V6QHME42IQHU")
+    smtp_pass = os.environ.get("BEBM+YU21gJzy8SkL2WTG+ubr+yg6j6OELcmQ87H3xYE")
+    from_email = os.environ.get("no-reply@hiop.it")
+
 
     if not smtp_host:
         raise RuntimeError("Missing SMTP_HOST environment variable")
