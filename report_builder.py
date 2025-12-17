@@ -4,7 +4,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Dict, List, Tuple, Union
 
 import pandas as pd
-from openpyxl.styles import Alignment
+from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
 
 from csv_loader import REPORT_TYPE_ROMAN, load_source_dataframe_for_report_type
@@ -214,6 +214,30 @@ def _apply_client_numeric_formatting(ws, df: pd.DataFrame) -> None:
         ws.column_dimensions[col_letter].width = max(current_width or 0, _COL_WIDTH_NUM)
 
 
+def _apply_totals_row_bold(ws, df: pd.DataFrame) -> None:
+    if df.empty:
+        return
+
+    max_row = 1 + len(df)  # header row is 1
+    max_col = len(df.columns)
+    bold_font = Font(bold=True)
+
+    for r in range(2, max_row + 1):
+        is_total = False
+        for c in range(1, max_col + 1):
+            v = ws.cell(row=r, column=c).value
+            if v == _TOTAL_LABEL:
+                is_total = True
+                break
+
+        if not is_total:
+            continue
+
+        for c in range(1, max_col + 1):
+            cell = ws.cell(row=r, column=c)
+            cell.font = bold_font
+
+
 def _to_excel_bytes(
     df: pd.DataFrame,
     sheet_name: str,
@@ -241,6 +265,7 @@ def _to_excel_bytes(
             )
 
         _apply_client_numeric_formatting(ws, df_out)
+        _apply_totals_row_bold(ws, df_out)
 
     buf.seek(0)
     return buf.read()
@@ -316,7 +341,7 @@ def build_report_excels_with_metadata(
         if gc not in df.columns:
             raise RuntimeError(f"Report type {report_type} requires grouping column '{gc}' but it is missing")
 
-    base_type, type_key = parse_report_type_key(report_type)
+    _, type_key = parse_report_type_key(report_type)
 
     if not group_cols:
         xlsx_bytes = _to_excel_bytes(
