@@ -68,9 +68,8 @@ def send_report_email(
     smtp_host = os.environ.get("SMTP_HOST")
     smtp_port_raw = os.environ.get("SMTP_PORT")
     smtp_user = os.environ.get("SMTP_USER")
-    # smtp_pass = os.environ.get("SMTP_PASSWORD")
+    smtp_pass = os.environ.get("SMTP_PASSWORD")
     from_email = os.environ.get("SENDER_EMAIL")
-    smtp_pass = "BEBM+YU21gJzy8SkL2WTG+ubr+yg6j6OELcmQ87H3xYE"
 
 
     if not smtp_host:
