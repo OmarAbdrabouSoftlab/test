@@ -70,6 +70,23 @@ def _report_type_keys_for_tipo_report(tipo_report: str, config_report_type_keys:
     return out
 
 
+def _match_produced_files_for_client(
+    *,
+    produced_files: Dict[Tuple[str, str], bytes],
+    report_type_key: str,
+    client_suffix: str,
+) -> List[Tuple[str, bytes]]:
+    matched: List[Tuple[str, bytes]] = []
+    for (k, suffix), data in produced_files.items():
+        if k != report_type_key:
+            continue
+        if not suffix:
+            continue
+        if suffix == client_suffix or client_suffix in suffix:
+            matched.append((suffix, data))
+    return matched
+
+
 @functions_framework.http
 def generate_report(request: Request):
     try:
@@ -126,16 +143,70 @@ def generate_report(request: Request):
         mail_sent: List[str] = []
         mail_failed: List[str] = []
 
+        try:
+            emails_map = load_client_emails()
+
+            for tipo_report, clients in emails_map.items():
+                target_report_type_keys = _report_type_keys_for_tipo_report(tipo_report, config_report_type_keys)
+                if not target_report_type_keys:
+                    continue
+
+                for client_id, recipients in clients.items():
+                    if not recipients:
+                        continue
+
+                    client_suffix = _sanitize_for_filename(client_id)
+
+                    for report_type_key in target_report_type_keys:
+                        if report_type_key not in report_meta:
+                            continue
+
+                        roman, input_yyyymmdd = report_meta[report_type_key]
+
+                        matched_files = _match_produced_files_for_client(
+                            produced_files=produced_files,
+                            report_type_key=report_type_key,
+                            client_suffix=client_suffix,
+                        )
+
+                        if not matched_files:
+                            mail_failed.append(
+                                f"Missing output for tipo_report={tipo_report}, report_type={report_type_key}, client_id={client_id}"
+                            )
+                            continue
+
+                        for suffix, xlsx_bytes in matched_files:
+                            attachment_filename = f"FT_BC_OC_REPORT_{roman}_{input_yyyymmdd}_{suffix}.xlsx"
+                            subject = f"FT_BC_OC_REPORT {report_type_key} {input_yyyymmdd}"
+                            body = f"In allegato il report {report_type_key} del {input_yyyymmdd}."
+
+                            try:
+                                send_report_email(
+                                    recipients=recipients,
+                                    subject=subject,
+                                    body=body,
+                                    attachment_filename=attachment_filename,
+                                    xlsx_bytes=xlsx_bytes,
+                                )
+                                mail_sent.append(
+                                    f"sent tipo_report={tipo_report} report_type={report_type_key} client_id={client_id} suffix={suffix} to {', '.join(recipients)}"
+                                )
+                            except Exception as exc:
+                                mail_failed.append(
+                                    f"Email failed tipo_report={tipo_report} report_type={report_type_key} client_id={client_id} suffix={suffix}: {repr(exc)}"
+                                )
+
+        except Exception as exc:
+            mail_failed.append(f"Email phase failed to start: {repr(exc)}")
+
         lines: List[str] = []
         lines.append(f"output_prefix: {output_today_uri}")
         lines.append(f"written: {len(written)}")
-        lines.extend(written)
         lines.append(f"skipped: {len(skipped)}")
         lines.extend(skipped)
         lines.append(f"failed: {len(failed)}")
         lines.extend(failed)
         lines.append(f"mail_sent: {len(mail_sent)}")
-        lines.extend(mail_sent)
         lines.append(f"mail_failed: {len(mail_failed)}")
         lines.extend(mail_failed)
 
