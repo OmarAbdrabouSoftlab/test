@@ -1,7 +1,7 @@
 import datetime
 import os
-import re
-from typing import Any, Dict, List, Optional, Tuple
+import secrets
+from typing import Dict, List, Tuple
 
 import functions_framework
 from flask import Request, make_response
@@ -10,23 +10,45 @@ from mail_handling import load_client_emails, send_report_email
 from report_builder import build_report_excels_with_metadata
 from report_schema import (
     delete_s3_prefix,
-    load_config, write_bytes_to_s3,
+    load_config,
+    write_bytes_to_s3,
     output_today_prefix_uri,
     parse_report_type_key,
     output_report_type_prefix_uri,
     sanitize_for_filename,
     report_type_keys_for_tipo_report,
-    report_type_keys_for_tipo_report,
-    match_produced_files_for_client
+    match_produced_files_for_client,
 )
 
 S3_BUCKET_NAME = os.environ.get("S3_BUCKET_NAME")
 S3_OUTPUT_PREFIX = os.environ.get("S3_OUTPUT_PREFIX")
 
 
+def _is_authorized(request: Request) -> bool:
+    expected = (os.environ.get("API_BEARER_TOKEN") or "").strip()
+    if not expected:
+        raise RuntimeError("Missing API_BEARER_TOKEN environment variable")
+
+    auth = (request.headers.get("Authorization") or "").strip()
+    scheme, _, token = auth.partition(" ")
+    if scheme.lower() != "bearer":
+        return False
+
+    token = token.strip()
+    if not token:
+        return False
+
+    return secrets.compare_digest(token, expected)
+
+
 @functions_framework.http
 def generate_report(request: Request):
     try:
+        if not _is_authorized(request):
+            resp = make_response(("Unauthorized", 401))
+            resp.headers["WWW-Authenticate"] = "Bearer"
+            return resp
+
         if not S3_BUCKET_NAME:
             return make_response(("Missing S3_BUCKET_NAME environment variable", 500))
 
@@ -34,7 +56,11 @@ def generate_report(request: Request):
         config_report_type_keys = list((config.get("report_types") or {}).keys())
 
         today = datetime.date.today().strftime("%Y-%m-%d")
-        output_today_uri = output_today_prefix_uri(S3_BUCKET_NAME, S3_OUTPUT_PREFIX or "Output/", today)
+        output_today_uri = output_today_prefix_uri(
+            S3_BUCKET_NAME,
+            S3_OUTPUT_PREFIX or "Output/",
+            today,
+        )
 
         delete_s3_prefix(output_today_uri)
 
