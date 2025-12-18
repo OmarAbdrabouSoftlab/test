@@ -1,499 +1,153 @@
-import io
+import datetime
+import os
 import re
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
-import pandas as pd
-from openpyxl.styles import Alignment, Font
-from openpyxl.utils import get_column_letter
+import functions_framework
+from flask import Request, make_response
 
-from csv_loader import REPORT_TYPE_ROMAN, load_source_dataframe_for_report_type
-from report_schema import get_source_columns_map, load_config
+from mail_handling import load_client_emails, send_report_email
+from report_builder import build_report_excels_with_metadata
+from report_schema import (
+    delete_s3_prefix,
+    load_config, write_bytes_to_s3,
+    output_today_prefix_uri,
+    parse_report_type_key,
+    output_report_type_prefix_uri,
+    sanitize_for_filename,
+    report_type_keys_for_tipo_report,
+    report_type_keys_for_tipo_report,
+    match_produced_files_for_client
+)
 
-
-_CLIENT_NUMERIC_2DP_COLS = {
-    "Fatturato_lordo_sconto_cassa_CY",
-    "Fatturato_lordo_sconto_cassa_PY",
-    "Delta_CYvsPY",
-    "DeltaPerc_CYvsPY",
-    "ORDINATO_INEVASO_CY",
-}
-
-_NUM_FORMAT_2DP = "#,##0.00"
-_COL_WIDTH_NUM = 18
-_TOTAL_LABEL = "Totale"
-
-
-def parse_report_type_key(report_type: Union[int, str]) -> Tuple[int, str]:
-    if isinstance(report_type, int):
-        return report_type, str(report_type)
-
-    s = str(report_type).strip()
-    if not s:
-        raise KeyError("Empty report_type")
-
-    if "_" in s:
-        base_str, _ = s.split("_", 1)
-        base = int(base_str)
-        return base, s
-
-    base = int(s)
-    return base, s
+S3_BUCKET_NAME = os.environ.get("S3_BUCKET_NAME")
+S3_OUTPUT_PREFIX = os.environ.get("S3_OUTPUT_PREFIX")
 
 
-def _get_logical_fields_specific_first(config: Dict[str, Any], report_type: Union[int, str]) -> List[str]:
-    report_types = config["report_types"]
-    _, type_key = parse_report_type_key(report_type)
-
-    if type_key not in report_types:
-        raise KeyError(f"Unknown report_type: {type_key}")
-
-    specific = report_types[type_key]["specific_fields"]
-    shared = config["shared_fields"]
-
-    result: List[str] = []
-    seen = set()
-
-    for field in list(specific) + list(shared):
-        if field not in seen:
-            seen.add(field)
-            result.append(field)
-
-    return result
-
-
-def sanitize_for_filename(value: Any) -> str:
-    s = "" if value is None else str(value)
-    s = s.strip()
-    if not s:
-        return "UNKNOWN"
-    s = re.sub(r"\s+", " ", s)
-    s = re.sub(r"[^A-Za-z0-9 _.-]", "", s)
-    s = s.replace(" ", "_")
-    s = s[:120].strip("_")
-    return s or "UNKNOWN"
-
-
-def _ensure_unique_columns(df: pd.DataFrame) -> None:
-    if not df.columns.is_unique:
-        dupes = df.columns[df.columns.duplicated()].astype(str).tolist()
-        raise ValueError(f"Duplicate column names detected: {dupes}")
-
-
-def _get_col_idx_1based(df: pd.DataFrame, column_name: str) -> int:
-    loc = df.columns.get_loc(column_name)
-    if not isinstance(loc, int):
-        raise ValueError(
-            f"Expected unique column match for '{column_name}', got {type(loc).__name__}. "
-            "This usually indicates duplicate column names."
-        )
-    return loc + 1
-
-
-def _merge_vertical_column(
-    ws,
-    df: pd.DataFrame,
-    column_name: str,
-    *,
-    exclude_last_row: bool = False,
-) -> None:
-    if column_name not in df.columns:
-        return
-    if len(df) <= 1:
-        return
-
-    _ensure_unique_columns(df)
-
-    col_idx = _get_col_idx_1based(df, column_name)
-    start_row = 2
-
-    data_len = len(df) - (1 if exclude_last_row else 0)
-    if data_len <= 1:
-        return
-
-    end_row = start_row + data_len - 1
-
-    ws.merge_cells(
-        start_row=start_row,
-        start_column=col_idx,
-        end_row=end_row,
-        end_column=col_idx,
-    )
-
-    cell = ws.cell(row=start_row, column=col_idx)
-    cell.alignment = Alignment(vertical="top")
-
-
-def _merge_vertical_columns(
-    ws,
-    df: pd.DataFrame,
-    column_names: List[str],
-    *,
-    exclude_last_row: bool = False,
-) -> None:
-    for col in column_names:
-        _merge_vertical_column(ws, df, col, exclude_last_row=exclude_last_row)
-
-
-def _parse_decimal_2dp(value: Any) -> Decimal | None:
-    if value is None:
-        return None
-    if pd.isna(value):
-        return None
-
-    s = str(value).strip()
-    if not s:
-        return None
-
+@functions_framework.http
+def generate_report(request: Request):
     try:
-        d = Decimal(s)
-    except (InvalidOperation, ValueError):
-        return None
-
-    return d.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-
-
-def _coerce_numeric_2dp_columns(df: pd.DataFrame) -> pd.DataFrame:
-    for col in df.columns:
-        if col in _CLIENT_NUMERIC_2DP_COLS:
-            df[col] = df[col].map(_parse_decimal_2dp)
-    return df
-
-
-def _build_totals_row(
-    df: pd.DataFrame,
-    *,
-    label_col: str,
-    keep_cols: List[str],
-) -> Dict[str, Any]:
-    totals: Dict[str, Any] = {c: None for c in df.columns}
-
-    # keep constant keys (so totals row still shows the group keys)
-    if not df.empty:
-        first = df.iloc[0]
-        for c in keep_cols:
-            if c in df.columns:
-                totals[c] = first[c]
-
-    # label on the chosen label column
-    if label_col in df.columns:
-        totals[label_col] = _TOTAL_LABEL
-    else:
-        # fallback
-        fallback = next((c for c in df.columns if c not in _CLIENT_NUMERIC_2DP_COLS), df.columns[0])
-        totals[fallback] = _TOTAL_LABEL
-
-    # numeric sums
-    for col in df.columns:
-        if col not in _CLIENT_NUMERIC_2DP_COLS:
-            continue
-
-        total = Decimal("0.00")
-        for v in df[col]:
-            if v is None or pd.isna(v):
-                continue
-            if isinstance(v, Decimal):
-                total += v
-            else:
-                parsed = _parse_decimal_2dp(v)
-                if parsed is not None:
-                    total += parsed
-
-        totals[col] = total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-
-    return totals
-
-
-def _append_totals_row(
-    df: pd.DataFrame,
-    *,
-    label_col: str,
-    keep_cols: List[str],
-) -> pd.DataFrame:
-    if df.empty:
-        return df
-
-    totals = _build_totals_row(df, label_col=label_col, keep_cols=keep_cols)
-    return pd.concat([df, pd.DataFrame([totals])], ignore_index=True)
-
-
-def _insert_subtotals(
-    df: pd.DataFrame,
-    *,
-    subtotal_cols: List[str],
-    label_col: str,
-) -> pd.DataFrame:
-    """
-    Inserts a 'Totale' row after each subgroup identified by subtotal_cols.
-    The totals row:
-      - keeps the subgroup key values for subtotal_cols[:-1]
-      - places 'Totale' into label_col (typically Gruppo_Merceologico)
-    """
-    if df.empty or not subtotal_cols:
-        return df
-
-    for c in subtotal_cols:
-        if c not in df.columns:
-            return df
-
-    out_frames: List[pd.DataFrame] = []
-    keep_cols = subtotal_cols[:-1]  # keep the parent keys
-
-    df_base = df.reset_index(drop=True)
-    for _, df_sub in df_base.groupby(subtotal_cols, dropna=False, sort=False):
-        out_frames.append(df_sub)
-        out_frames.append(pd.DataFrame([_build_totals_row(df_sub, label_col=label_col, keep_cols=keep_cols)]))
-
-    return pd.concat(out_frames, ignore_index=True)
-
-
-def _apply_client_numeric_formatting(ws, df: pd.DataFrame) -> None:
-    target_cols = [c for c in df.columns if c in _CLIENT_NUMERIC_2DP_COLS]
-    if not target_cols or df.empty:
-        return
-
-    _ensure_unique_columns(df)
-
-    start_row = 2
-    end_row = start_row + len(df) - 1
-
-    for col_name in target_cols:
-        col_idx_1based = _get_col_idx_1based(df, col_name)
-
-        for r in range(start_row, end_row + 1):
-            cell = ws.cell(row=r, column=col_idx_1based)
-            if cell.value is None or cell.value == "":
-                continue
-            cell.number_format = _NUM_FORMAT_2DP
-
-        col_letter = get_column_letter(col_idx_1based)
-        current_width = ws.column_dimensions[col_letter].width
-        ws.column_dimensions[col_letter].width = max(current_width or 0, _COL_WIDTH_NUM)
-
-
-def _apply_totals_row_bold(ws, df: pd.DataFrame) -> None:
-    if df.empty:
-        return
-
-    max_row = 1 + len(df)  # header row is 1
-    max_col = len(df.columns)
-    bold_font = Font(bold=True)
-
-    for r in range(2, max_row + 1):
-        is_total = False
-        for c in range(1, max_col + 1):
-            if ws.cell(row=r, column=c).value == _TOTAL_LABEL:
-                is_total = True
-                break
-
-        if not is_total:
-            continue
-
-        for c in range(1, max_col + 1):
-            ws.cell(row=r, column=c).font = bold_font
-
-
-def _to_excel_bytes(
-    df: pd.DataFrame,
-    sheet_name: str,
-    merge_columns: List[str] | None = None,
-) -> bytes:
-    _ensure_unique_columns(df)
-
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name=sheet_name)
-        ws = writer.sheets[sheet_name]
-
-        if merge_columns:
-            _merge_vertical_columns(ws, df, merge_columns, exclude_last_row=False)
-
-        _apply_client_numeric_formatting(ws, df)
-        _apply_totals_row_bold(ws, df)
-
-    buf.seek(0)
-    return buf.read()
-
-
-def _grouping_columns_for_report_type(config: Dict[str, Any], report_type: Union[int, str]) -> List[str]:
-    fields = config["fields"]
-
-    def sc(logical_name: str) -> str:
-        return fields[logical_name]["source_column"]
-
-    _, type_key = parse_report_type_key(report_type)
-
-    if type_key == "1":
-        return [sc("ragione_sociale")]
-    if type_key == "2_CONS":
-        return [sc("consorzio")]
-    if type_key == "2_GRUPPO":
-        return [sc("gruppo_commerciale")]
-    if type_key == "3_CONS":
-        return [sc("consorzio"), sc("ragione_sociale")]
-    if type_key == "3_GRUPPO":
-        return [sc("gruppo_commerciale"), sc("ragione_sociale")]
-    if type_key == "4":
-        return [sc("agenzia_anagrafica")]
-    if type_key == "5":
-        return [sc("agenzia_anagrafica"), sc("ragione_sociale")]
-    return []
-
-
-def _file_grouping_columns_for_report_type(config: Dict[str, Any], report_type: Union[int, str]) -> List[str]:
-    """
-    This is the critical fix.
-
-    - For 3_* and 5 we want ONE FILE per top-level key only:
-        3_CONS   -> consorzio
-        3_GRUPPO -> gruppo_commerciale
-        5        -> agenzia_anagrafica
-    - For all others, file grouping == existing grouping.
-    """
-    fields = config["fields"]
-
-    def sc(logical_name: str) -> str:
-        return fields[logical_name]["source_column"]
-
-    _, type_key = parse_report_type_key(report_type)
-
-    if type_key == "3_CONS":
-        return [sc("consorzio")]
-    if type_key == "3_GRUPPO":
-        return [sc("gruppo_commerciale")]
-    if type_key == "5":
-        return [sc("agenzia_anagrafica")]
-
-    return _grouping_columns_for_report_type(config, report_type)
-
-
-def _preferred_totals_label_col(config: Dict[str, Any], df: pd.DataFrame) -> str:
-    """
-    Prefer putting 'Totale' into Gruppo_Merceologico if available,
-    so group keys (e.g. consorzio/agenzia/ragione) remain visible on totals rows.
-    """
-    fields = config.get("fields", {})
-    gm = fields.get("gruppo_merceologico", {}).get("source_column")
-    if gm and gm in df.columns:
-        return gm
-
-    # fallback: last non-numeric column
-    non_num = [c for c in df.columns if c not in _CLIENT_NUMERIC_2DP_COLS]
-    return non_num[-1] if non_num else df.columns[0]
-
-
-def _prepare_dataframe_for_report_type(
-    config: Dict[str, Any],
-    report_type: Union[int, str],
-) -> Tuple[pd.DataFrame, str, str]:
-    base_type, type_key = parse_report_type_key(report_type)
-
-    logical_fields = _get_logical_fields_specific_first(config, type_key)
-    source_columns_map = get_source_columns_map(config, logical_fields)
-
-    source_name = config["report_types"][type_key].get("source", "main_csv")
-    df, input_yyyymmdd = load_source_dataframe_for_report_type(config, source_name, type_key)
-
-    ordered_source_columns = [source_columns_map[lf] for lf in logical_fields]
-    missing = [c for c in ordered_source_columns if c not in df.columns]
-
-    if missing:
-        raise RuntimeError(
-            "Source CSV is missing columns: "
-            + ", ".join(missing)
-            + "\nCSV columns found: "
-            + ", ".join(df.columns.astype(str))
-        )
-
-    df = df[ordered_source_columns].copy()
-    _ensure_unique_columns(df)
-
-    df = _coerce_numeric_2dp_columns(df)
-
-    roman = REPORT_TYPE_ROMAN[base_type]
-    return df, input_yyyymmdd, roman
-
-
-def build_report_excels_with_metadata(
-    report_type: Union[int, str],
-) -> List[Tuple[bytes, str, str, str]]:
-    config: Dict[str, Any] = load_config()
-    df, input_yyyymmdd, roman = _prepare_dataframe_for_report_type(config, report_type)
-
-    _, type_key = parse_report_type_key(report_type)
-
-    # subtotal_cols = where we want multiple Totale rows inside the file
-    subtotal_cols = _grouping_columns_for_report_type(config, report_type)
-    for c in subtotal_cols:
-        if c not in df.columns:
-            raise RuntimeError(f"Report type {report_type} requires grouping column '{c}' but it is missing")
-
-    # file_group_cols = how many files to create (this is what fixes the issue)
-    file_group_cols = _file_grouping_columns_for_report_type(config, report_type)
-    for c in file_group_cols:
-        if c not in df.columns:
-            raise RuntimeError(f"Report type {report_type} requires file grouping column '{c}' but it is missing")
-
-    # no grouping at all -> single file, single totals row
-    if not file_group_cols:
-        label_col = _preferred_totals_label_col(config, df)
-        keep_cols: List[str] = []  # no group keys to keep
-        df_out = _append_totals_row(df.reset_index(drop=True), label_col=label_col, keep_cols=keep_cols)
-
-        xlsx_bytes = _to_excel_bytes(
-            df_out,
-            sheet_name=f"tipo_{type_key}",
-            merge_columns=None,
-        )
-        return [(xlsx_bytes, input_yyyymmdd, roman, "")]
-
-    # preserve your existing type 1 ordering (important for readability)
-    if type_key == "1":
-        grp_mer_col = config["fields"]["gruppo_merceologico"]["source_column"]
-        if grp_mer_col not in df.columns:
-            raise RuntimeError(f"Type 1 requires columns '{grp_mer_col}'")
-        df = df.sort_values(by=[grp_mer_col], kind="mergesort")
-
-    outputs: List[Tuple[bytes, str, str, str]] = []
-
-    df_base = df.reset_index(drop=True)
-
-    # One output file per file_group_cols
-    for keys, df_file in df_base.groupby(file_group_cols, dropna=False, sort=False):
-        if not isinstance(keys, tuple):
-            keys = (keys,)
-
-        suffix_parts = [sanitize_for_filename(k) for k in keys]
-        suffix = "__".join(suffix_parts)
-
-        # Inside each file: if subtotal_cols are "deeper" than file_group_cols,
-        # we insert subtotals per subtotal_cols, NOT per file_group_cols.
-        df_file_out = df_file.copy()
-
-        label_col = _preferred_totals_label_col(config, df_file_out)
-
-        # Ensure deterministic blocks for subtotal insertion (critical)
-        sort_cols = [c for c in subtotal_cols if c in df_file_out.columns]
-        if sort_cols:
-            df_file_out = df_file_out.sort_values(by=sort_cols, kind="mergesort").reset_index(drop=True)
-
-        # If subtotal requires multiple keys (3_* and 5), insert subtotal rows for the full subtotal_cols.
-        if len(subtotal_cols) >= 2 and len(file_group_cols) == 1:
-            df_file_out = _insert_subtotals(df_file_out, subtotal_cols=subtotal_cols, label_col=label_col)
-        else:
-            # Existing behavior: one totals row at the bottom of each file
-            keep_cols = file_group_cols[:]  # keep group key(s)
-            df_file_out = _append_totals_row(df_file_out, label_col=label_col, keep_cols=keep_cols)
-
-        xlsx_bytes = _to_excel_bytes(
-            df_file_out,
-            sheet_name=f"tipo_{type_key}",
-            merge_columns=file_group_cols,  # merge only the file-level key(s)
-        )
-
-        outputs.append((xlsx_bytes, input_yyyymmdd, roman, suffix))
-
-    if not outputs:
-        raise RuntimeError(f"Type {report_type}: no output generated")
-
-    return outputs
+        if not S3_BUCKET_NAME:
+            return make_response(("Missing S3_BUCKET_NAME environment variable", 500))
+
+        config = load_config()
+        config_report_type_keys = list((config.get("report_types") or {}).keys())
+
+        today = datetime.date.today().strftime("%Y-%m-%d")
+        output_today_uri = output_today_prefix_uri(S3_BUCKET_NAME, S3_OUTPUT_PREFIX or "Output/", today)
+
+        delete_s3_prefix(output_today_uri)
+
+        written: List[str] = []
+        skipped: List[str] = []
+        failed: List[str] = []
+
+        report_meta: Dict[str, Tuple[str, str]] = {}
+        produced_files: Dict[Tuple[str, str], bytes] = {}
+
+        for report_type_key in config_report_type_keys:
+            try:
+                outputs = build_report_excels_with_metadata(report_type_key)
+                output_report_type_uri = output_report_type_prefix_uri(output_today_uri, report_type_key)
+
+                _, subtype, _ = parse_report_type_key(report_type_key)
+
+                for xlsx_bytes, input_yyyymmdd, roman, suffix in outputs:
+                    report_meta.setdefault(report_type_key, (roman, input_yyyymmdd))
+
+                    prefix_token = f"{roman}_{subtype}" if subtype else roman
+                    file_suffix = f"_{suffix}" if suffix else ""
+                    output_filename = f"FT_BC_OC_REPORT_{prefix_token}_{input_yyyymmdd}{file_suffix}.xlsx"
+
+                    produced_files[(report_type_key, suffix or "")] = xlsx_bytes
+
+                    output_uri = f"{output_report_type_uri}{output_filename}"
+
+                    write_bytes_to_s3(
+                        output_uri,
+                        xlsx_bytes,
+                        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+                    written.append(output_uri)
+
+            except Exception as exc:
+                msg = str(exc)
+                if "No matching CSV found for report_type" in msg:
+                    skipped.append(f"type {report_type_key}: {msg}")
+                else:
+                    failed.append(f"type {report_type_key}: {repr(exc)}")
+
+        mail_sent: List[str] = []
+        mail_failed: List[str] = []
+
+        try:
+            emails_map = load_client_emails()
+
+            for tipo_report, clients in emails_map.items():
+                target_report_type_keys = report_type_keys_for_tipo_report(tipo_report, config_report_type_keys)
+                if not target_report_type_keys:
+                    continue
+
+                for client_id, recipients in clients.items():
+                    if not recipients:
+                        continue
+
+                    client_suffix = sanitize_for_filename(client_id)
+
+                    for report_type_key in target_report_type_keys:
+                        if report_type_key not in report_meta:
+                            continue
+
+                        roman, input_yyyymmdd = report_meta[report_type_key]
+
+                        matched_files = match_produced_files_for_client(
+                            produced_files=produced_files,
+                            report_type_key=report_type_key,
+                            client_suffix=client_suffix,
+                        )
+
+                        if not matched_files:
+                            mail_failed.append(
+                                f"Missing output for tipo_report={tipo_report}, report_type={report_type_key}, client_id={client_id}"
+                            )
+                            continue
+
+                        for suffix, xlsx_bytes in matched_files:
+                            attachment_filename = f"FT_BC_OC_REPORT_{roman}_{input_yyyymmdd}_{suffix}.xlsx"
+                            subject = f"[HIOP] Report tipo {report_type_key} del {input_yyyymmdd}"
+                            body = f"In allegato il report del {input_yyyymmdd}."
+
+                            try:
+                                send_report_email(
+                                    recipients=recipients,
+                                    subject=subject,
+                                    body=body,
+                                    attachment_filename=attachment_filename,
+                                    xlsx_bytes=xlsx_bytes,
+                                )
+                                mail_sent.append(
+                                    f"sent tipo_report={tipo_report} report_type={report_type_key} client_id={client_id} suffix={suffix} to {', '.join(recipients)}"
+                                )
+                            except Exception as exc:
+                                mail_failed.append(
+                                    f"Email failed tipo_report={tipo_report} report_type={report_type_key} client_id={client_id} suffix={suffix}: {repr(exc)}"
+                                )
+
+        except Exception as exc:
+            mail_failed.append(f"Email phase failed to start: {repr(exc)}")
+
+        lines: List[str] = []
+        lines.append(f"written: {len(written)}")
+        lines.append(f"skipped: {len(skipped)}")
+        lines.extend(skipped)
+        lines.append(f"failed: {len(failed)}")
+        lines.extend(failed)
+        lines.append(f"mail_sent: {len(mail_sent)}")
+        lines.append(f"mail_failed: {len(mail_failed)}")
+        lines.extend(mail_failed)
+
+        status = 200 if len(written) > 0 and len(failed) == 0 else 500 if len(written) == 0 else 207
+        return make_response(("\n".join(lines), status))
+
+    except Exception as exc:
+        return make_response((f"Internal error: {exc}", 500))

@@ -1,7 +1,7 @@
 import io
 import re
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, List, Tuple, Union, Optional
 
 import pandas as pd
 from openpyxl.styles import Alignment, Font
@@ -160,22 +160,36 @@ def _coerce_numeric_2dp_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _append_totals_row(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return df
-
+def _build_totals_row(
+    df: pd.DataFrame,
+    *,
+    label_col: str,
+    keep_cols: List[str],
+) -> Dict[str, Any]:
     totals: Dict[str, Any] = {c: None for c in df.columns}
 
-    label_col = next((c for c in df.columns if c not in _CLIENT_NUMERIC_2DP_COLS), df.columns[0])
-    totals[label_col] = _TOTAL_LABEL
+    # keep constant keys (so totals row still shows the group keys)
+    if not df.empty:
+        first = df.iloc[0]
+        for c in keep_cols:
+            if c in df.columns:
+                totals[c] = first[c]
 
+    # label on the chosen label column
+    if label_col in df.columns:
+        totals[label_col] = _TOTAL_LABEL
+    else:
+        # fallback
+        fallback = next((c for c in df.columns if c not in _CLIENT_NUMERIC_2DP_COLS), df.columns[0])
+        totals[fallback] = _TOTAL_LABEL
+
+    # numeric sums
     for col in df.columns:
         if col not in _CLIENT_NUMERIC_2DP_COLS:
             continue
 
-        s = df[col]
         total = Decimal("0.00")
-        for v in s:
+        for v in df[col]:
             if v is None or pd.isna(v):
                 continue
             if isinstance(v, Decimal):
@@ -187,7 +201,50 @@ def _append_totals_row(df: pd.DataFrame) -> pd.DataFrame:
 
         totals[col] = total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
+    return totals
+
+
+def _append_totals_row(
+    df: pd.DataFrame,
+    *,
+    label_col: str,
+    keep_cols: List[str],
+) -> pd.DataFrame:
+    if df.empty:
+        return df
+
+    totals = _build_totals_row(df, label_col=label_col, keep_cols=keep_cols)
     return pd.concat([df, pd.DataFrame([totals])], ignore_index=True)
+
+
+def _insert_subtotals(
+    df: pd.DataFrame,
+    *,
+    subtotal_cols: List[str],
+    label_col: str,
+) -> pd.DataFrame:
+    """
+    Inserts a 'Totale' row after each subgroup identified by subtotal_cols.
+    The totals row:
+      - keeps the subgroup key values for subtotal_cols[:-1]
+      - places 'Totale' into label_col (typically Gruppo_Merceologico)
+    """
+    if df.empty or not subtotal_cols:
+        return df
+
+    for c in subtotal_cols:
+        if c not in df.columns:
+            return df
+
+    out_frames: List[pd.DataFrame] = []
+    keep_cols = subtotal_cols[:-1]  # keep the parent keys
+
+    df_base = df.reset_index(drop=True)
+    for _, df_sub in df_base.groupby(subtotal_cols, dropna=False, sort=False):
+        out_frames.append(df_sub)
+        out_frames.append(pd.DataFrame([_build_totals_row(df_sub, label_col=label_col, keep_cols=keep_cols)]))
+
+    return pd.concat(out_frames, ignore_index=True)
 
 
 def _apply_client_numeric_formatting(ws, df: pd.DataFrame) -> None:
@@ -225,8 +282,7 @@ def _apply_totals_row_bold(ws, df: pd.DataFrame) -> None:
     for r in range(2, max_row + 1):
         is_total = False
         for c in range(1, max_col + 1):
-            v = ws.cell(row=r, column=c).value
-            if v == _TOTAL_LABEL:
+            if ws.cell(row=r, column=c).value == _TOTAL_LABEL:
                 is_total = True
                 break
 
@@ -234,38 +290,26 @@ def _apply_totals_row_bold(ws, df: pd.DataFrame) -> None:
             continue
 
         for c in range(1, max_col + 1):
-            cell = ws.cell(row=r, column=c)
-            cell.font = bold_font
+            ws.cell(row=r, column=c).font = bold_font
 
 
 def _to_excel_bytes(
     df: pd.DataFrame,
     sheet_name: str,
     merge_columns: List[str] | None = None,
-    *,
-    add_totals_row: bool = False,
 ) -> bytes:
     _ensure_unique_columns(df)
 
-    df_out = df.reset_index(drop=True)
-    if add_totals_row:
-        df_out = _append_totals_row(df_out)
-
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        df_out.to_excel(writer, index=False, sheet_name=sheet_name)
+        df.to_excel(writer, index=False, sheet_name=sheet_name)
         ws = writer.sheets[sheet_name]
 
         if merge_columns:
-            _merge_vertical_columns(
-                ws,
-                df_out,
-                merge_columns,
-                exclude_last_row=add_totals_row,
-            )
+            _merge_vertical_columns(ws, df, merge_columns, exclude_last_row=False)
 
-        _apply_client_numeric_formatting(ws, df_out)
-        _apply_totals_row_bold(ws, df_out)
+        _apply_client_numeric_formatting(ws, df)
+        _apply_totals_row_bold(ws, df)
 
     buf.seek(0)
     return buf.read()
@@ -294,6 +338,48 @@ def _grouping_columns_for_report_type(config: Dict[str, Any], report_type: Union
     if type_key == "5":
         return [sc("agenzia_anagrafica"), sc("ragione_sociale")]
     return []
+
+
+def _file_grouping_columns_for_report_type(config: Dict[str, Any], report_type: Union[int, str]) -> List[str]:
+    """
+    This is the critical fix.
+
+    - For 3_* and 5 we want ONE FILE per top-level key only:
+        3_CONS   -> consorzio
+        3_GRUPPO -> gruppo_commerciale
+        5        -> agenzia_anagrafica
+    - For all others, file grouping == existing grouping.
+    """
+    fields = config["fields"]
+
+    def sc(logical_name: str) -> str:
+        return fields[logical_name]["source_column"]
+
+    _, type_key = parse_report_type_key(report_type)
+
+    if type_key == "3_CONS":
+        return [sc("consorzio")]
+    if type_key == "3_GRUPPO":
+        return [sc("gruppo_commerciale")]
+    if type_key == "5":
+        return [sc("agenzia_anagrafica")]
+
+    return _grouping_columns_for_report_type(config, report_type)
+
+
+def _preferred_totals_label_col(config: Dict[str, Any], df: pd.DataFrame) -> str:
+    """
+    Prefer putting 'Totale' into Gruppo_Merceologico if available,
+    so group keys (e.g. consorzio/agenzia/ragione) remain visible on totals rows.
+    """
+    fields = config.get("fields", {})
+    gm = fields.get("gruppo_merceologico", {}).get("source_column")
+    if gm and gm in df.columns:
+        return gm
+
+    # fallback: last non-numeric column
+    non_num = [c for c in df.columns if c not in _CLIENT_NUMERIC_2DP_COLS]
+    return non_num[-1] if non_num else df.columns[0]
 
 
 def _prepare_dataframe_for_report_type(
@@ -334,24 +420,34 @@ def build_report_excels_with_metadata(
     config: Dict[str, Any] = load_config()
     df, input_yyyymmdd, roman = _prepare_dataframe_for_report_type(config, report_type)
 
-    add_totals = True
-
-    group_cols = _grouping_columns_for_report_type(config, report_type)
-    for gc in group_cols:
-        if gc not in df.columns:
-            raise RuntimeError(f"Report type {report_type} requires grouping column '{gc}' but it is missing")
-
     _, type_key = parse_report_type_key(report_type)
 
-    if not group_cols:
+    # subtotal_cols = where we want multiple Totale rows inside the file
+    subtotal_cols = _grouping_columns_for_report_type(config, report_type)
+    for c in subtotal_cols:
+        if c not in df.columns:
+            raise RuntimeError(f"Report type {report_type} requires grouping column '{c}' but it is missing")
+
+    # file_group_cols = how many files to create (this is what fixes the issue)
+    file_group_cols = _file_grouping_columns_for_report_type(config, report_type)
+    for c in file_group_cols:
+        if c not in df.columns:
+            raise RuntimeError(f"Report type {report_type} requires file grouping column '{c}' but it is missing")
+
+    # no grouping at all -> single file, single totals row
+    if not file_group_cols:
+        label_col = _preferred_totals_label_col(config, df)
+        keep_cols: List[str] = []  # no group keys to keep
+        df_out = _append_totals_row(df.reset_index(drop=True), label_col=label_col, keep_cols=keep_cols)
+
         xlsx_bytes = _to_excel_bytes(
-            df,
+            df_out,
             sheet_name=f"tipo_{type_key}",
             merge_columns=None,
-            add_totals_row=add_totals,
         )
         return [(xlsx_bytes, input_yyyymmdd, roman, "")]
 
+    # preserve your existing type 1 ordering (important for readability)
     if type_key == "1":
         grp_mer_col = config["fields"]["gruppo_merceologico"]["source_column"]
         if grp_mer_col not in df.columns:
@@ -361,18 +457,38 @@ def build_report_excels_with_metadata(
     outputs: List[Tuple[bytes, str, str, str]] = []
 
     df_base = df.reset_index(drop=True)
-    for keys, df_group in df_base.groupby(group_cols, dropna=False, sort=False):
+
+    # One output file per file_group_cols
+    for keys, df_file in df_base.groupby(file_group_cols, dropna=False, sort=False):
         if not isinstance(keys, tuple):
             keys = (keys,)
 
         suffix_parts = [sanitize_for_filename(k) for k in keys]
         suffix = "__".join(suffix_parts)
 
+        # Inside each file: if subtotal_cols are "deeper" than file_group_cols,
+        # we insert subtotals per subtotal_cols, NOT per file_group_cols.
+        df_file_out = df_file.copy()
+
+        label_col = _preferred_totals_label_col(config, df_file_out)
+
+        # Ensure deterministic blocks for subtotal insertion (critical)
+        sort_cols = [c for c in subtotal_cols if c in df_file_out.columns]
+        if sort_cols:
+            df_file_out = df_file_out.sort_values(by=sort_cols, kind="mergesort").reset_index(drop=True)
+
+        # If subtotal requires multiple keys (3_* and 5), insert subtotal rows for the full subtotal_cols.
+        if len(subtotal_cols) >= 2 and len(file_group_cols) == 1:
+            df_file_out = _insert_subtotals(df_file_out, subtotal_cols=subtotal_cols, label_col=label_col)
+        else:
+            # Existing behavior: one totals row at the bottom of each file
+            keep_cols = file_group_cols[:]  # keep group key(s)
+            df_file_out = _append_totals_row(df_file_out, label_col=label_col, keep_cols=keep_cols)
+
         xlsx_bytes = _to_excel_bytes(
-            df_group,
+            df_file_out,
             sheet_name=f"tipo_{type_key}",
-            merge_columns=group_cols,
-            add_totals_row=add_totals,
+            merge_columns=file_group_cols,  # merge only the file-level key(s)
         )
 
         outputs.append((xlsx_bytes, input_yyyymmdd, roman, suffix))
