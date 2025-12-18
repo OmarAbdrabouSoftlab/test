@@ -5,7 +5,7 @@ import pandas as pd
 
 from email.message import EmailMessage
 from typing import Dict, List
-from report_schema import _as_s3_prefix_uri, read_bytes_from_s3
+from report_schema import as_s3_prefix_uri, read_bytes_from_s3
 
 
 _CLIENT_EMAILS_FILENAME = "client_emails.xlsx"
@@ -18,7 +18,7 @@ def load_client_emails() -> Dict[str, Dict[str, List[str]]]:
     if not bucket:
         raise RuntimeError("Missing S3_BUCKET_NAME environment variable")
 
-    prefix_uri = _as_s3_prefix_uri(bucket, prefix)
+    prefix_uri = as_s3_prefix_uri(bucket, prefix)
     xlsx_uri = f"{prefix_uri}{_CLIENT_EMAILS_FILENAME}"
     data = read_bytes_from_s3(xlsx_uri)
 

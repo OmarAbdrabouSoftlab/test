@@ -1,11 +1,10 @@
 import io
 import os
 import re
-from datetime import datetime
-from typing import Any, Dict, Optional, Tuple, Union
-
 import pandas as pd
 
+from datetime import datetime
+from typing import Any, Dict, Optional, Tuple, Union
 from report_schema import get_s3_client, parse_s3_uri, read_bytes_from_s3
 
 
@@ -35,7 +34,7 @@ def parse_report_type_key(report_type: Union[int, str]) -> Tuple[int, Optional[s
     return int(s), None
 
 
-def _get_input_prefix_uri(config: Dict[str, Any], source_name: str) -> str:
+def get_input_prefix_uri(config: Dict[str, Any], source_name: str) -> str:
     bucket = os.environ.get("S3_BUCKET_NAME")
     input_prefix = os.environ.get("S3_INPUT_PREFIX")
 
@@ -58,7 +57,7 @@ def _get_input_prefix_uri(config: Dict[str, Any], source_name: str) -> str:
     return path
 
 
-def _find_latest_csv_for_report_type(
+def find_latest_csv_for_report_type(
     prefix_uri: str,
     report_type: Union[int, str],
 ) -> Tuple[str, str]:
@@ -128,12 +127,12 @@ def load_source_dataframe_for_report_type(
     sources = config.get("sources", {})
     src_conf = sources.get(source_name, {})
 
-    prefix_uri = _get_input_prefix_uri(config, source_name)
+    prefix_uri = get_input_prefix_uri(config, source_name)
     delimiter = src_conf.get("delimiter", ",")
     encoding = src_conf.get("encoding", "utf-8")
     header_flag = src_conf.get("header", True)
 
-    latest_uri, input_yyyymmdd = _find_latest_csv_for_report_type(prefix_uri, report_type)
+    latest_uri, input_yyyymmdd = find_latest_csv_for_report_type(prefix_uri, report_type)
     data_bytes = read_bytes_from_s3(latest_uri)
 
     df = pd.read_csv(

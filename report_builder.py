@@ -8,7 +8,7 @@ from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
 
 from csv_loader import REPORT_TYPE_ROMAN, load_source_dataframe_for_report_type
-from report_schema import get_source_columns_map, load_config
+from report_schema import get_source_columns_map, load_config, sanitize_for_filename
 
 
 _CLIENT_NUMERIC_2DP_COLS = {
@@ -41,7 +41,7 @@ def parse_report_type_key(report_type: Union[int, str]) -> Tuple[int, str]:
     return base, s
 
 
-def _get_logical_fields_specific_first(config: Dict[str, Any], report_type: Union[int, str]) -> List[str]:
+def get_logical_fields_specific_first(config: Dict[str, Any], report_type: Union[int, str]) -> List[str]:
     report_types = config["report_types"]
     _, type_key = parse_report_type_key(report_type)
 
@@ -62,25 +62,13 @@ def _get_logical_fields_specific_first(config: Dict[str, Any], report_type: Unio
     return result
 
 
-def sanitize_for_filename(value: Any) -> str:
-    s = "" if value is None else str(value)
-    s = s.strip()
-    if not s:
-        return "UNKNOWN"
-    s = re.sub(r"\s+", " ", s)
-    s = re.sub(r"[^A-Za-z0-9 _.-]", "", s)
-    s = s.replace(" ", "_")
-    s = s[:120].strip("_")
-    return s or "UNKNOWN"
-
-
-def _ensure_unique_columns(df: pd.DataFrame) -> None:
+def ensure_unique_columns(df: pd.DataFrame) -> None:
     if not df.columns.is_unique:
         dupes = df.columns[df.columns.duplicated()].astype(str).tolist()
         raise ValueError(f"Duplicate column names detected: {dupes}")
 
 
-def _get_col_idx_1based(df: pd.DataFrame, column_name: str) -> int:
+def get_col_idx_1based(df: pd.DataFrame, column_name: str) -> int:
     loc = df.columns.get_loc(column_name)
     if not isinstance(loc, int):
         raise ValueError(
@@ -90,7 +78,7 @@ def _get_col_idx_1based(df: pd.DataFrame, column_name: str) -> int:
     return loc + 1
 
 
-def _merge_vertical_column(
+def merge_vertical_column(
     ws,
     df: pd.DataFrame,
     column_name: str,
@@ -102,9 +90,9 @@ def _merge_vertical_column(
     if len(df) <= 1:
         return
 
-    _ensure_unique_columns(df)
+    ensure_unique_columns(df)
 
-    col_idx = _get_col_idx_1based(df, column_name)
+    col_idx = get_col_idx_1based(df, column_name)
     start_row = 2
 
     data_len = len(df) - (1 if exclude_last_row else 0)
@@ -124,7 +112,7 @@ def _merge_vertical_column(
     cell.alignment = Alignment(vertical="top")
 
 
-def _merge_vertical_columns(
+def merge_vertical_columns(
     ws,
     df: pd.DataFrame,
     column_names: List[str],
@@ -132,10 +120,10 @@ def _merge_vertical_columns(
     exclude_last_row: bool = False,
 ) -> None:
     for col in column_names:
-        _merge_vertical_column(ws, df, col, exclude_last_row=exclude_last_row)
+        merge_vertical_column(ws, df, col, exclude_last_row=exclude_last_row)
 
 
-def _parse_decimal_2dp(value: Any) -> Decimal | None:
+def parse_decimal_2dp(value: Any) -> Decimal | None:
     if value is None:
         return None
     if pd.isna(value):
@@ -153,14 +141,14 @@ def _parse_decimal_2dp(value: Any) -> Decimal | None:
     return d.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
-def _coerce_numeric_2dp_columns(df: pd.DataFrame) -> pd.DataFrame:
+def coerce_numeric_2dp_columns(df: pd.DataFrame) -> pd.DataFrame:
     for col in df.columns:
         if col in _CLIENT_NUMERIC_2DP_COLS:
-            df[col] = df[col].map(_parse_decimal_2dp)
+            df[col] = df[col].map(parse_decimal_2dp)
     return df
 
 
-def _build_totals_row(
+def build_totals_row(
     df: pd.DataFrame,
     *,
     label_col: str,
@@ -168,22 +156,18 @@ def _build_totals_row(
 ) -> Dict[str, Any]:
     totals: Dict[str, Any] = {c: None for c in df.columns}
 
-    # keep constant keys (so totals row still shows the group keys)
     if not df.empty:
         first = df.iloc[0]
         for c in keep_cols:
             if c in df.columns:
                 totals[c] = first[c]
 
-    # label on the chosen label column
     if label_col in df.columns:
         totals[label_col] = _TOTAL_LABEL
     else:
-        # fallback
         fallback = next((c for c in df.columns if c not in _CLIENT_NUMERIC_2DP_COLS), df.columns[0])
         totals[fallback] = _TOTAL_LABEL
 
-    # numeric sums
     for col in df.columns:
         if col not in _CLIENT_NUMERIC_2DP_COLS:
             continue
@@ -195,7 +179,7 @@ def _build_totals_row(
             if isinstance(v, Decimal):
                 total += v
             else:
-                parsed = _parse_decimal_2dp(v)
+                parsed = parse_decimal_2dp(v)
                 if parsed is not None:
                     total += parsed
 
@@ -204,7 +188,7 @@ def _build_totals_row(
     return totals
 
 
-def _append_totals_row(
+def append_totals_row(
     df: pd.DataFrame,
     *,
     label_col: str,
@@ -213,22 +197,16 @@ def _append_totals_row(
     if df.empty:
         return df
 
-    totals = _build_totals_row(df, label_col=label_col, keep_cols=keep_cols)
+    totals = build_totals_row(df, label_col=label_col, keep_cols=keep_cols)
     return pd.concat([df, pd.DataFrame([totals])], ignore_index=True)
 
 
-def _insert_subtotals(
+def insert_subtotals(
     df: pd.DataFrame,
     *,
     subtotal_cols: List[str],
     label_col: str,
 ) -> pd.DataFrame:
-    """
-    Inserts a 'Totale' row after each subgroup identified by subtotal_cols.
-    The totals row:
-      - keeps the subgroup key values for subtotal_cols[:-1]
-      - places 'Totale' into label_col (typically Gruppo_Merceologico)
-    """
     if df.empty or not subtotal_cols:
         return df
 
@@ -242,23 +220,23 @@ def _insert_subtotals(
     df_base = df.reset_index(drop=True)
     for _, df_sub in df_base.groupby(subtotal_cols, dropna=False, sort=False):
         out_frames.append(df_sub)
-        out_frames.append(pd.DataFrame([_build_totals_row(df_sub, label_col=label_col, keep_cols=keep_cols)]))
+        out_frames.append(pd.DataFrame([build_totals_row(df_sub, label_col=label_col, keep_cols=keep_cols)]))
 
     return pd.concat(out_frames, ignore_index=True)
 
 
-def _apply_client_numeric_formatting(ws, df: pd.DataFrame) -> None:
+def apply_client_numeric_formatting(ws, df: pd.DataFrame) -> None:
     target_cols = [c for c in df.columns if c in _CLIENT_NUMERIC_2DP_COLS]
     if not target_cols or df.empty:
         return
 
-    _ensure_unique_columns(df)
+    ensure_unique_columns(df)
 
     start_row = 2
     end_row = start_row + len(df) - 1
 
     for col_name in target_cols:
-        col_idx_1based = _get_col_idx_1based(df, col_name)
+        col_idx_1based = get_col_idx_1based(df, col_name)
 
         for r in range(start_row, end_row + 1):
             cell = ws.cell(row=r, column=col_idx_1based)
@@ -271,7 +249,7 @@ def _apply_client_numeric_formatting(ws, df: pd.DataFrame) -> None:
         ws.column_dimensions[col_letter].width = max(current_width or 0, _COL_WIDTH_NUM)
 
 
-def _apply_totals_row_bold(ws, df: pd.DataFrame) -> None:
+def apply_totals_row_bold(ws, df: pd.DataFrame) -> None:
     if df.empty:
         return
 
@@ -293,12 +271,12 @@ def _apply_totals_row_bold(ws, df: pd.DataFrame) -> None:
             ws.cell(row=r, column=c).font = bold_font
 
 
-def _to_excel_bytes(
+def to_excel_bytes(
     df: pd.DataFrame,
     sheet_name: str,
     merge_columns: List[str] | None = None,
 ) -> bytes:
-    _ensure_unique_columns(df)
+    ensure_unique_columns(df)
 
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
@@ -306,16 +284,16 @@ def _to_excel_bytes(
         ws = writer.sheets[sheet_name]
 
         if merge_columns:
-            _merge_vertical_columns(ws, df, merge_columns, exclude_last_row=False)
+            merge_vertical_columns(ws, df, merge_columns, exclude_last_row=False)
 
-        _apply_client_numeric_formatting(ws, df)
-        _apply_totals_row_bold(ws, df)
+        apply_client_numeric_formatting(ws, df)
+        apply_totals_row_bold(ws, df)
 
     buf.seek(0)
     return buf.read()
 
 
-def _grouping_columns_for_report_type(config: Dict[str, Any], report_type: Union[int, str]) -> List[str]:
+def grouping_columns_for_report_type(config: Dict[str, Any], report_type: Union[int, str]) -> List[str]:
     fields = config["fields"]
 
     def sc(logical_name: str) -> str:
@@ -340,16 +318,7 @@ def _grouping_columns_for_report_type(config: Dict[str, Any], report_type: Union
     return []
 
 
-def _file_grouping_columns_for_report_type(config: Dict[str, Any], report_type: Union[int, str]) -> List[str]:
-    """
-    This is the critical fix.
-
-    - For 3_* and 5 we want ONE FILE per top-level key only:
-        3_CONS   -> consorzio
-        3_GRUPPO -> gruppo_commerciale
-        5        -> agenzia_anagrafica
-    - For all others, file grouping == existing grouping.
-    """
+def filegrouping_columns_for_report_type(config: Dict[str, Any], report_type: Union[int, str]) -> List[str]:
     fields = config["fields"]
 
     def sc(logical_name: str) -> str:
@@ -364,31 +333,27 @@ def _file_grouping_columns_for_report_type(config: Dict[str, Any], report_type: 
     if type_key == "5":
         return [sc("agenzia_anagrafica")]
 
-    return _grouping_columns_for_report_type(config, report_type)
+    return grouping_columns_for_report_type(config, report_type)
 
 
-def _preferred_totals_label_col(config: Dict[str, Any], df: pd.DataFrame) -> str:
-    """
-    Prefer putting 'Totale' into Gruppo_Merceologico if available,
-    so group keys (e.g. consorzio/agenzia/ragione) remain visible on totals rows.
-    """
+def preferred_totals_label_col(config: Dict[str, Any], df: pd.DataFrame) -> str:
     fields = config.get("fields", {})
     gm = fields.get("gruppo_merceologico", {}).get("source_column")
     if gm and gm in df.columns:
         return gm
 
-    # fallback: last non-numeric column
+    # Fallback to last non-numeric column
     non_num = [c for c in df.columns if c not in _CLIENT_NUMERIC_2DP_COLS]
     return non_num[-1] if non_num else df.columns[0]
 
 
-def _prepare_dataframe_for_report_type(
+def prepare_dataframe_for_report_type(
     config: Dict[str, Any],
     report_type: Union[int, str],
 ) -> Tuple[pd.DataFrame, str, str]:
     base_type, type_key = parse_report_type_key(report_type)
 
-    logical_fields = _get_logical_fields_specific_first(config, type_key)
+    logical_fields = get_logical_fields_specific_first(config, type_key)
     source_columns_map = get_source_columns_map(config, logical_fields)
 
     source_name = config["report_types"][type_key].get("source", "main_csv")
@@ -406,9 +371,9 @@ def _prepare_dataframe_for_report_type(
         )
 
     df = df[ordered_source_columns].copy()
-    _ensure_unique_columns(df)
+    ensure_unique_columns(df)
 
-    df = _coerce_numeric_2dp_columns(df)
+    df = coerce_numeric_2dp_columns(df)
 
     roman = REPORT_TYPE_ROMAN[base_type]
     return df, input_yyyymmdd, roman
@@ -418,36 +383,32 @@ def build_report_excels_with_metadata(
     report_type: Union[int, str],
 ) -> List[Tuple[bytes, str, str, str]]:
     config: Dict[str, Any] = load_config()
-    df, input_yyyymmdd, roman = _prepare_dataframe_for_report_type(config, report_type)
+    df, input_yyyymmdd, roman = prepare_dataframe_for_report_type(config, report_type)
 
     _, type_key = parse_report_type_key(report_type)
 
-    # subtotal_cols = where we want multiple Totale rows inside the file
-    subtotal_cols = _grouping_columns_for_report_type(config, report_type)
+    subtotal_cols = grouping_columns_for_report_type(config, report_type)
     for c in subtotal_cols:
         if c not in df.columns:
             raise RuntimeError(f"Report type {report_type} requires grouping column '{c}' but it is missing")
 
-    # file_group_cols = how many files to create (this is what fixes the issue)
-    file_group_cols = _file_grouping_columns_for_report_type(config, report_type)
+    file_group_cols = filegrouping_columns_for_report_type(config, report_type)
     for c in file_group_cols:
         if c not in df.columns:
             raise RuntimeError(f"Report type {report_type} requires file grouping column '{c}' but it is missing")
 
-    # no grouping at all -> single file, single totals row
     if not file_group_cols:
-        label_col = _preferred_totals_label_col(config, df)
+        label_col = preferred_totals_label_col(config, df)
         keep_cols: List[str] = []  # no group keys to keep
-        df_out = _append_totals_row(df.reset_index(drop=True), label_col=label_col, keep_cols=keep_cols)
+        df_out = append_totals_row(df.reset_index(drop=True), label_col=label_col, keep_cols=keep_cols)
 
-        xlsx_bytes = _to_excel_bytes(
+        xlsx_bytes = to_excel_bytes(
             df_out,
             sheet_name=f"tipo_{type_key}",
             merge_columns=None,
         )
         return [(xlsx_bytes, input_yyyymmdd, roman, "")]
 
-    # preserve your existing type 1 ordering (important for readability)
     if type_key == "1":
         grp_mer_col = config["fields"]["gruppo_merceologico"]["source_column"]
         if grp_mer_col not in df.columns:
@@ -458,7 +419,6 @@ def build_report_excels_with_metadata(
 
     df_base = df.reset_index(drop=True)
 
-    # One output file per file_group_cols
     for keys, df_file in df_base.groupby(file_group_cols, dropna=False, sort=False):
         if not isinstance(keys, tuple):
             keys = (keys,)
@@ -466,29 +426,24 @@ def build_report_excels_with_metadata(
         suffix_parts = [sanitize_for_filename(k) for k in keys]
         suffix = "__".join(suffix_parts)
 
-        # Inside each file: if subtotal_cols are "deeper" than file_group_cols,
-        # we insert subtotals per subtotal_cols, NOT per file_group_cols.
         df_file_out = df_file.copy()
 
-        label_col = _preferred_totals_label_col(config, df_file_out)
+        label_col = preferred_totals_label_col(config, df_file_out)
 
-        # Ensure deterministic blocks for subtotal insertion (critical)
         sort_cols = [c for c in subtotal_cols if c in df_file_out.columns]
         if sort_cols:
             df_file_out = df_file_out.sort_values(by=sort_cols, kind="mergesort").reset_index(drop=True)
 
-        # If subtotal requires multiple keys (3_* and 5), insert subtotal rows for the full subtotal_cols.
         if len(subtotal_cols) >= 2 and len(file_group_cols) == 1:
-            df_file_out = _insert_subtotals(df_file_out, subtotal_cols=subtotal_cols, label_col=label_col)
+            df_file_out = insert_subtotals(df_file_out, subtotal_cols=subtotal_cols, label_col=label_col)
         else:
-            # Existing behavior: one totals row at the bottom of each file
             keep_cols = file_group_cols[:]  # keep group key(s)
-            df_file_out = _append_totals_row(df_file_out, label_col=label_col, keep_cols=keep_cols)
+            df_file_out = append_totals_row(df_file_out, label_col=label_col, keep_cols=keep_cols)
 
-        xlsx_bytes = _to_excel_bytes(
+        xlsx_bytes = to_excel_bytes(
             df_file_out,
             sheet_name=f"tipo_{type_key}",
-            merge_columns=file_group_cols,  # merge only the file-level key(s)
+            merge_columns=file_group_cols,
         )
 
         outputs.append((xlsx_bytes, input_yyyymmdd, roman, suffix))

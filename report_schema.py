@@ -17,7 +17,7 @@ def get_s3_client():
     return _S3_CLIENT
 
 
-def _as_s3_prefix_uri(bucket: str, key_prefix: str) -> str:
+def as_s3_prefix_uri(bucket: str, key_prefix: str) -> str:
     prefix = key_prefix.strip("/")
     return f"s3://{bucket}/{prefix}/" if prefix else f"s3://{bucket}/"
 
@@ -139,7 +139,7 @@ def load_config() -> Dict[str, Any]:
     if not bucket:
         raise RuntimeError("Missing S3_BUCKET_NAME environment variable")
 
-    prefix_uri = _as_s3_prefix_uri(bucket, prefix)
+    prefix_uri = as_s3_prefix_uri(bucket, prefix)
     config_uri = get_latest_json_uri(prefix_uri)
 
     raw_json = read_text_from_s3(config_uri)
