@@ -140,8 +140,16 @@ def generate_report(request: Request):
 
                         for suffix, xlsx_bytes in matched_files:
                             attachment_filename = f"FT_BC_OC_REPORT_{roman}_{input_yyyymmdd}_{suffix}.xlsx"
-                            subject = f"[HIOP] Report tipo {report_type_key} del {input_yyyymmdd}"
-                            body = f"In allegato il report del {input_yyyymmdd}."
+                            subject = f"[Contact Italia] Report mensile"
+                            body = (
+                                "Buongiorno,\n"
+                                "\n"
+                                "Si allega quanto in oggetto.\n"
+                                "\n"
+                                "Cordiali saluti,\n"
+                                "\n"
+                                "Contact Italia"
+                            )
 
                             try:
                                 send_report_email(
