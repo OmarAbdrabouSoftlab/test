@@ -172,6 +172,33 @@ def build_totals_row(
         if col not in _CLIENT_NUMERIC_2DP_COLS:
             continue
 
+        if col == "DeltaPerc_CYvsPY":
+            total = Decimal("0.00")
+            count = 0
+
+            for v in df[col]:
+                if v is None or pd.isna(v):
+                    continue
+
+                if isinstance(v, Decimal):
+                    parsed = v
+                else:
+                    parsed = parse_decimal_2dp(v)
+
+                if parsed is None:
+                    continue
+
+                total += parsed
+                count += 1
+
+            if count == 0:
+                totals[col] = None
+            else:
+                mean = (total / Decimal(count)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                totals[col] = mean
+
+            continue
+
         total = Decimal("0.00")
         for v in df[col]:
             if v is None or pd.isna(v):
