@@ -1,7 +1,7 @@
 import io
 import re
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-from typing import Any, Dict, List, Tuple, Union, Optional
+from typing import Any, Dict, List, Tuple, Union, Iterable
 
 import pandas as pd
 from openpyxl.styles import Alignment, Font
@@ -146,6 +146,110 @@ def coerce_numeric_2dp_columns(df: pd.DataFrame) -> pd.DataFrame:
         if col in _CLIENT_NUMERIC_2DP_COLS:
             df[col] = df[col].map(parse_decimal_2dp)
     return df
+
+
+def _iter_decimals(values: Iterable[Any]) -> Iterable[Decimal]:
+    for v in values:
+        if v is None or pd.isna(v):
+            continue
+        if isinstance(v, Decimal):
+            d = v
+        else:
+            d = parse_decimal_2dp(v)
+        if d is not None:
+            yield d
+
+
+def _decimal_sum(values: Iterable[Any]) -> Decimal | None:
+    total = Decimal("0.00")
+    has_any = False
+    for d in _iter_decimals(values):
+        total += d
+        has_any = True
+    if not has_any:
+        return None
+    return total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _decimal_mean(values: Iterable[Any]) -> Decimal | None:
+    total = Decimal("0.00")
+    count = 0
+    for d in _iter_decimals(values):
+        total += d
+        count += 1
+    if count == 0:
+        return None
+    return (total / Decimal(count)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def aggregation_grouping_columns_for_report_type(config: Dict[str, Any], report_type: Union[int, str]) -> List[str]:
+    """
+    Defines the target dataframe grain for each report type.
+    This step eliminates duplicates at export-level by aggregating upstream finer-grain rows.
+    """
+    fields = config["fields"]
+
+    def sc(logical_name: str) -> str:
+        return fields[logical_name]["source_column"]
+
+    _, type_key = parse_report_type_key(report_type)
+
+    if type_key == "1":
+        return [sc("ragione_sociale"), sc("gruppo_merceologico")]
+    if type_key == "2_CONS":
+        return [sc("consorzio"), sc("gruppo_merceologico")]
+    if type_key == "2_GRUPPO":
+        return [sc("gruppo_commerciale"), sc("gruppo_merceologico")]
+    if type_key == "3_CONS":
+        return [sc("consorzio"), sc("ragione_sociale"), sc("gruppo_merceologico")]
+    if type_key == "3_GRUPPO":
+        return [sc("gruppo_commerciale"), sc("ragione_sociale"), sc("gruppo_merceologico")]
+    if type_key == "4":
+        return [sc("agenzia_anagrafica"), sc("ragione_sociale")]
+    if type_key == "5":
+        return [sc("agenzia_anagrafica"), sc("ragione_sociale"), sc("gruppo_merceologico")]
+
+    return []
+
+
+def aggregate_to_report_grain(df: pd.DataFrame, *, group_cols: List[str]) -> pd.DataFrame:
+    if df.empty or not group_cols:
+        return df
+
+    missing = [c for c in group_cols if c not in df.columns]
+    if missing:
+        raise RuntimeError(f"Aggregation requires grouping columns missing from dataframe: {missing}")
+
+    # Guard against silently dropping/choosing values for non-numeric columns outside the grouping keys.
+    extra_non_numeric = [c for c in df.columns if c not in group_cols and c not in _CLIENT_NUMERIC_2DP_COLS]
+    if extra_non_numeric:
+        raise RuntimeError(
+            "Aggregation would drop/merge non-numeric columns not included in grouping keys. "
+            f"Add them to group_cols or define an aggregation strategy. Columns: {extra_non_numeric}"
+        )
+
+    agg: Dict[str, Any] = {}
+    for col in df.columns:
+        if col in group_cols:
+            continue
+        if col not in _CLIENT_NUMERIC_2DP_COLS:
+            continue
+
+        if col == "DeltaPerc_CYvsPY":
+            agg[col] = _decimal_mean
+        else:
+            agg[col] = _decimal_sum
+
+    if not agg:
+        return df.drop_duplicates(subset=group_cols, keep="first").reset_index(drop=True)
+
+    df_out = (
+        df.groupby(group_cols, dropna=False, sort=False, as_index=False)
+        .agg(agg)
+        .reset_index(drop=True)
+    )
+
+    return df_out
 
 
 def build_totals_row(
@@ -401,6 +505,9 @@ def prepare_dataframe_for_report_type(
     ensure_unique_columns(df)
 
     df = coerce_numeric_2dp_columns(df)
+
+    group_cols = aggregation_grouping_columns_for_report_type(config, type_key)
+    df = aggregate_to_report_grain(df, group_cols=group_cols)
 
     roman = REPORT_TYPE_ROMAN[base_type]
     return df, input_yyyymmdd, roman
