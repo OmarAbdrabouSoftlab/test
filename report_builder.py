@@ -21,7 +21,9 @@ _CLIENT_NUMERIC_2DP_COLS = {
 
 _NUM_FORMAT_2DP = "#,##0.00"
 _COL_WIDTH_NUM = 18
+
 _TOTAL_LABEL = "Totale"
+_GRAND_TOTAL_LABEL = "Gran Totale"
 
 
 def parse_report_type_key(report_type: Union[int, str]) -> Tuple[int, str]:
@@ -220,7 +222,6 @@ def aggregate_to_report_grain(df: pd.DataFrame, *, group_cols: List[str]) -> pd.
     if missing:
         raise RuntimeError(f"Aggregation requires grouping columns missing from dataframe: {missing}")
 
-    # Guard against silently dropping/choosing values for non-numeric columns outside the grouping keys.
     extra_non_numeric = [c for c in df.columns if c not in group_cols and c not in _CLIENT_NUMERIC_2DP_COLS]
     if extra_non_numeric:
         raise RuntimeError(
@@ -257,6 +258,7 @@ def build_totals_row(
     *,
     label_col: str,
     keep_cols: List[str],
+    label_text: str = _TOTAL_LABEL,
 ) -> Dict[str, Any]:
     totals: Dict[str, Any] = {c: None for c in df.columns}
 
@@ -267,10 +269,10 @@ def build_totals_row(
                 totals[c] = first[c]
 
     if label_col in df.columns:
-        totals[label_col] = _TOTAL_LABEL
+        totals[label_col] = label_text
     else:
         fallback = next((c for c in df.columns if c not in _CLIENT_NUMERIC_2DP_COLS), df.columns[0])
-        totals[fallback] = _TOTAL_LABEL
+        totals[fallback] = label_text
 
     for col in df.columns:
         if col not in _CLIENT_NUMERIC_2DP_COLS:
@@ -328,8 +330,27 @@ def append_totals_row(
     if df.empty:
         return df
 
-    totals = build_totals_row(df, label_col=label_col, keep_cols=keep_cols)
+    totals = build_totals_row(df, label_col=label_col, keep_cols=keep_cols, label_text=_TOTAL_LABEL)
     return pd.concat([df, pd.DataFrame([totals])], ignore_index=True)
+
+
+def append_grand_total_row(
+    df_target: pd.DataFrame,
+    *,
+    df_source: pd.DataFrame,
+    label_col: str,
+    keep_cols: List[str],
+) -> pd.DataFrame:
+    """
+    Appends a final 'Gran Totale' row computed from df_source.
+    df_target may already contain subtotal 'Totale' rows; df_source must be the raw data-only dataframe
+    to avoid double counting.
+    """
+    if df_source.empty:
+        return df_target
+
+    gt = build_totals_row(df_source, label_col=label_col, keep_cols=keep_cols, label_text=_GRAND_TOTAL_LABEL)
+    return pd.concat([df_target, pd.DataFrame([gt])], ignore_index=True)
 
 
 def insert_subtotals(
@@ -351,7 +372,9 @@ def insert_subtotals(
     df_base = df.reset_index(drop=True)
     for _, df_sub in df_base.groupby(subtotal_cols, dropna=False, sort=False):
         out_frames.append(df_sub)
-        out_frames.append(pd.DataFrame([build_totals_row(df_sub, label_col=label_col, keep_cols=keep_cols)]))
+        out_frames.append(
+            pd.DataFrame([build_totals_row(df_sub, label_col=label_col, keep_cols=keep_cols, label_text=_TOTAL_LABEL)])
+        )
 
     return pd.concat(out_frames, ignore_index=True)
 
@@ -387,11 +410,12 @@ def apply_totals_row_bold(ws, df: pd.DataFrame) -> None:
     max_row = 1 + len(df)  # header row is 1
     max_col = len(df.columns)
     bold_font = Font(bold=True)
+    bold_labels = {_TOTAL_LABEL, _GRAND_TOTAL_LABEL}
 
     for r in range(2, max_row + 1):
         is_total = False
         for c in range(1, max_col + 1):
-            if ws.cell(row=r, column=c).value == _TOTAL_LABEL:
+            if ws.cell(row=r, column=c).value in bold_labels:
                 is_total = True
                 break
 
@@ -473,7 +497,6 @@ def preferred_totals_label_col(config: Dict[str, Any], df: pd.DataFrame) -> str:
     if gm and gm in df.columns:
         return gm
 
-    # Fallback to last non-numeric column
     non_num = [c for c in df.columns if c not in _CLIENT_NUMERIC_2DP_COLS]
     return non_num[-1] if non_num else df.columns[0]
 
@@ -533,7 +556,7 @@ def build_report_excels_with_metadata(
 
     if not file_group_cols:
         label_col = preferred_totals_label_col(config, df)
-        keep_cols: List[str] = []  # no group keys to keep
+        keep_cols: List[str] = []
         df_out = append_totals_row(df.reset_index(drop=True), label_col=label_col, keep_cols=keep_cols)
 
         xlsx_bytes = to_excel_bytes(
@@ -553,6 +576,8 @@ def build_report_excels_with_metadata(
 
     df_base = df.reset_index(drop=True)
 
+    needs_grand_total = type_key in {"3_CONS", "3_GRUPPO", "5"}
+
     for keys, df_file in df_base.groupby(file_group_cols, dropna=False, sort=False):
         if not isinstance(keys, tuple):
             keys = (keys,)
@@ -568,11 +593,22 @@ def build_report_excels_with_metadata(
         if sort_cols:
             df_file_out = df_file_out.sort_values(by=sort_cols, kind="mergesort").reset_index(drop=True)
 
+        # Keep a data-only frame for the Gran Totale computation (avoid double-counting subtotal rows).
+        df_for_grand_total = df_file_out.copy()
+
         if len(subtotal_cols) >= 2 and len(file_group_cols) == 1:
             df_file_out = insert_subtotals(df_file_out, subtotal_cols=subtotal_cols, label_col=label_col)
         else:
-            keep_cols = file_group_cols[:]  # keep group key(s)
+            keep_cols = file_group_cols[:]
             df_file_out = append_totals_row(df_file_out, label_col=label_col, keep_cols=keep_cols)
+
+        if needs_grand_total:
+            df_file_out = append_grand_total_row(
+                df_file_out,
+                df_source=df_for_grand_total,
+                label_col=label_col,
+                keep_cols=file_group_cols[:],
+            )
 
         xlsx_bytes = to_excel_bytes(
             df_file_out,
