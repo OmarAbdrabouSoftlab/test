@@ -186,10 +186,6 @@ def _decimal_mean(values: Iterable[Any]) -> Decimal | None:
 
 
 def aggregation_grouping_columns_for_report_type(config: Dict[str, Any], report_type: Union[int, str]) -> List[str]:
-    """
-    Defines the target dataframe grain for each report type.
-    This step eliminates duplicates at export-level by aggregating upstream finer-grain rows.
-    """
     fields = config["fields"]
 
     def sc(logical_name: str) -> str:
@@ -342,11 +338,6 @@ def append_grand_total_row(
     label_col: str,
     keep_cols: List[str],
 ) -> pd.DataFrame:
-    """
-    Appends a final 'Gran Totale' row computed from df_source.
-    df_target may already contain subtotal 'Totale' rows; df_source must be the raw data-only dataframe
-    to avoid double counting.
-    """
     if df_source.empty:
         return df_target
 
@@ -426,6 +417,15 @@ def apply_totals_row_bold(ws, df: pd.DataFrame) -> None:
         for c in range(1, max_col + 1):
             ws.cell(row=r, column=c).font = bold_font
 
+def _to_float(v: Any) -> float | None:
+    if v is None or pd.isna(v):
+        return None
+    if isinstance(v, Decimal):
+        return float(v)
+    if isinstance(v, (int, float)):
+        return float(v)
+    parsed = parse_decimal_2dp(v)
+    return float(parsed) if parsed is not None else None
 
 def to_excel_bytes(
     df: pd.DataFrame,
@@ -434,16 +434,23 @@ def to_excel_bytes(
 ) -> bytes:
     ensure_unique_columns(df)
 
+    df_excel = df.copy()
+    for col in df_excel.columns:
+        if col not in _CLIENT_NUMERIC_2DP_COLS:
+            continue
+
+        df_excel[col] = df_excel[col].map(_to_float)
+
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name=sheet_name)
+        df_excel.to_excel(writer, index=False, sheet_name=sheet_name)
         ws = writer.sheets[sheet_name]
 
         if merge_columns:
-            merge_vertical_columns(ws, df, merge_columns, exclude_last_row=False)
+            merge_vertical_columns(ws, df_excel, merge_columns, exclude_last_row=False)
 
-        apply_client_numeric_formatting(ws, df)
-        apply_totals_row_bold(ws, df)
+        apply_client_numeric_formatting(ws, df_excel)
+        apply_totals_row_bold(ws, df_excel)
 
     buf.seek(0)
     return buf.read()
