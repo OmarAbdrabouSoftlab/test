@@ -1,5 +1,4 @@
 import io
-import re
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Dict, List, Tuple, Union, Iterable
 
@@ -19,7 +18,8 @@ _CLIENT_NUMERIC_2DP_COLS = {
     "ORDINATO_INEVASO_CY",
 }
 
-_NUM_FORMAT_2DP = "#.##0,00"
+#Force format
+_NUM_FORMAT_2DP = '[$-0410] #.##0,00'
 _COL_WIDTH_NUM = 18
 
 _TOTAL_LABEL = "Totale"
