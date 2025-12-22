@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Tuple, Union, Iterable
 import pandas as pd
 from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
+from openpyxl.styles import numbers
 
 from csv_loader import REPORT_TYPE_ROMAN, load_source_dataframe_for_report_type
 from report_schema import get_source_columns_map, load_config, sanitize_for_filename
@@ -19,7 +20,7 @@ _CLIENT_NUMERIC_2DP_COLS = {
 }
 
 #Force format
-_NUM_FORMAT_2DP = '[$-0410] #.##0,00'
+_NUM_FORMAT_2DP = numbers.FORMAT_NUMBER_00
 _COL_WIDTH_NUM = 18
 
 _TOTAL_LABEL = "Totale"
